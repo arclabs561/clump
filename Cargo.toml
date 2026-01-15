@@ -1,0 +1,24 @@
+[package]
+name = "clump"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Dense clustering primitives: K-means, DBSCAN"
+repository = "https://github.com/arclabs561/clump"
+keywords = ["clustering", "kmeans", "dbscan"]
+categories = ["algorithms", "mathematics", "science"]
+
+[dependencies]
+ndarray = "0.16"
+rand = "0.9"
+thiserror = "2.0"
+
+rayon = { version = "1.10", optional = true }
+
+[features]
+default = []
+parallel = ["dep:rayon"]
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.5"
