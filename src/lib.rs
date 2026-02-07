@@ -7,8 +7,8 @@
 //! assume tensors, GPUs, or a specific ML framework.
 
 use rand::Rng;
-use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -62,11 +62,17 @@ pub fn kmeans(points: &[&[f32]], cfg: &KMeansConfig) -> Result<KMeansResult, Clu
 
     let dim = points[0].len();
     if dim == 0 {
-        return Err(ClumpError::DimensionMismatch { expected: 1, got: 0 });
+        return Err(ClumpError::DimensionMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     for p in points.iter().skip(1) {
         if p.len() != dim {
-            return Err(ClumpError::DimensionMismatch { expected: dim, got: p.len() });
+            return Err(ClumpError::DimensionMismatch {
+                expected: dim,
+                got: p.len(),
+            });
         }
     }
 
@@ -240,5 +246,37 @@ mod tests {
             }
         }
     }
-}
 
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 64,
+            .. ProptestConfig::default()
+        })]
+        #[test]
+        fn prop_kmeans_is_deterministic_for_fixed_seed(
+            n in 1usize..80,
+            dim in 1usize..8,
+            k in 1usize..8,
+            seed in any::<u64>(),
+        ) {
+            let mut pts: Vec<Vec<f32>> = Vec::with_capacity(n);
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            for _ in 0..n {
+                let mut v = vec![0.0f32; dim];
+                for d in 0..dim {
+                    v[d] = rng.random_range(-1.0..1.0);
+                }
+                pts.push(v);
+            }
+            let refs: Vec<&[f32]> = pts.iter().map(|v| v.as_slice()).collect();
+            let cfg = KMeansConfig { k, seed, ..KMeansConfig::new(k) };
+
+            let r1 = kmeans(&refs, &cfg).unwrap();
+            let r2 = kmeans(&refs, &cfg).unwrap();
+
+            // Assignments should be stable; centroids can also be checked but are more sensitive
+            // to tie-breaking and float drift, so we keep the deterministic contract on assignments.
+            prop_assert_eq!(r1.assignments, r2.assignments);
+        }
+    }
+}
