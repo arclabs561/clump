@@ -13,7 +13,12 @@ categories = ["algorithms", "science"]
 [dependencies]
 thiserror = "2.0"
 rand = "0.9"
-rand_chacha = "0.9"
+ndarray = "0.16"
+rayon = { version = "1.10", optional = true }
+
+[features]
+default = []
+parallel = ["dep:rayon"]
 
 [dev-dependencies]
 proptest = "1.9"
