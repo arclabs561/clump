@@ -3,22 +3,18 @@ name = "clump"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Dense clustering primitives: K-means, DBSCAN"
+description = "Dense clustering primitives (k-means and related helpers)"
 repository = "https://github.com/arclabs561/clump"
-keywords = ["clustering", "kmeans", "dbscan"]
-categories = ["algorithms", "mathematics", "science"]
+homepage = "https://github.com/arclabs561/clump"
+documentation = "https://docs.rs/clump"
+keywords = ["clustering", "kmeans", "ml", "algorithms"]
+categories = ["algorithms", "science"]
 
 [dependencies]
-ndarray = "0.16"
-rand = "0.9"
 thiserror = "2.0"
-
-rayon = { version = "1.10", optional = true }
-
-[features]
-default = []
-parallel = ["dep:rayon"]
+rand = "0.9"
+rand_chacha = "0.9"
 
 [dev-dependencies]
-criterion = "0.5"
-proptest = "1.5"
+proptest = "1.9"
+
