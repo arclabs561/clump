@@ -211,10 +211,25 @@ impl EVoC {
         }
     }
 
+    /// Fit on dense vectors, storing layers/tree/duplicates on `self`.
+    pub fn fit(&mut self, data: &[Vec<f32>]) -> Result<()> {
+        self.fit_inner(data)?;
+        Ok(())
+    }
+
     /// Fit on dense vectors and return a label per point (noise as `None`).
     ///
     /// The returned labels are for the **finest** available layer (largest number of clusters).
     pub fn fit_predict(&mut self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
+        let n = data.len();
+        self.fit_inner(data)?;
+        Ok(self
+            .cluster_layers
+            .first()
+            .map_or_else(|| vec![None; n], |layer| layer.assignments.clone()))
+    }
+
+    fn fit_inner(&mut self, data: &[Vec<f32>]) -> Result<()> {
         if data.is_empty() {
             return Err(Error::EmptyInput);
         }
@@ -279,12 +294,7 @@ impl EVoC {
         // Step 5: detect near-duplicates.
         self.duplicates = detect_duplicates(n, &self.mst_edges, self.params.duplicate_threshold);
 
-        // Return the finest-grained assignments (largest number of clusters).
-        if let Some(layer) = self.cluster_layers.first() {
-            Ok(layer.assignments.clone())
-        } else {
-            Ok(vec![None; n])
-        }
+        Ok(())
     }
 
     /// Access extracted cluster layers (finest → coarsest).
@@ -310,6 +320,84 @@ impl EVoC {
     /// Access the inferred original dimension (if fitted).
     pub fn original_dim(&self) -> Option<usize> {
         self.original_dim
+    }
+
+    /// Convenience accessor for the finest (most granular) extracted layer.
+    pub fn finest_layer(&self) -> Option<&ClusterLayer> {
+        self.cluster_layers.first()
+    }
+
+    /// Convenience accessor for the coarsest extracted layer.
+    pub fn coarsest_layer(&self) -> Option<&ClusterLayer> {
+        self.cluster_layers.last()
+    }
+
+    /// Convenience accessor for labels from the finest layer (if fitted).
+    pub fn labels_finest(&self) -> Option<&[Option<usize>]> {
+        self.finest_layer().map(|l| l.assignments.as_slice())
+    }
+
+    /// Convenience accessor for labels from the coarsest layer (if fitted).
+    pub fn labels_coarsest(&self) -> Option<&[Option<usize>]> {
+        self.coarsest_layer().map(|l| l.assignments.as_slice())
+    }
+
+    /// Extract a layer by cutting the MST at an explicit distance threshold.
+    ///
+    /// This can be used to reproduce a particular granularity without relying on
+    /// the internal layer sampling heuristics.
+    pub fn layer_at_threshold(&self, threshold: f32) -> Result<ClusterLayer> {
+        if !threshold.is_finite() || threshold < 0.0 {
+            return Err(Error::InvalidParameter {
+                name: "threshold",
+                message: "must be a finite, non-negative number",
+            });
+        }
+
+        let n = self
+            .cluster_layers
+            .first()
+            .map(|l| l.assignments.len())
+            .ok_or_else(|| Error::Other("EVoC is not fitted".to_string()))?;
+
+        Ok(layer_at_threshold(
+            n,
+            &self.mst_edges,
+            threshold,
+            self.params.min_cluster_size.max(1),
+        ))
+    }
+
+    /// Extract the layer whose cluster count is closest to `target_clusters`.
+    ///
+    /// This is a best-effort heuristic based on the MST cut; it does **not** guarantee an exact
+    /// match, especially when `min_cluster_size > 1` (small components are treated as noise).
+    pub fn layer_for_n_clusters(&self, target_clusters: usize) -> Result<ClusterLayer> {
+        if target_clusters == 0 {
+            return Err(Error::InvalidParameter {
+                name: "target_clusters",
+                message: "must be at least 1",
+            });
+        }
+
+        let n = self
+            .cluster_layers
+            .first()
+            .map(|l| l.assignments.len())
+            .ok_or_else(|| Error::Other("EVoC is not fitted".to_string()))?;
+
+        let thr = best_threshold_for_n_clusters(
+            n,
+            &self.mst_edges,
+            self.params.min_cluster_size.max(1),
+            target_clusters,
+        );
+        Ok(layer_at_threshold(
+            n,
+            &self.mst_edges,
+            thr,
+            self.params.min_cluster_size.max(1),
+        ))
     }
 }
 
@@ -491,6 +579,75 @@ fn extract_layers(
     // Sort by granularity (finest first).
     layers_out.sort_by(|a, b| b.num_clusters.cmp(&a.num_clusters));
     layers_out
+}
+
+fn best_threshold_for_n_clusters(
+    n: usize,
+    mst_edges: &[(usize, usize, f32)],
+    min_cluster_size: usize,
+    target_clusters: usize,
+) -> f32 {
+    if n <= 1 {
+        return 0.0;
+    }
+
+    // Ensure we process edges in increasing threshold order.
+    let mut edges = mst_edges.to_vec();
+    edges.sort_by(|a, b| a.2.total_cmp(&b.2));
+
+    let mut uf = UnionFind::new(n);
+
+    // Track number of "real" clusters: connected components whose size >= min_cluster_size.
+    // Also track how many points are assigned to a non-noise cluster under this definition.
+    let mut clusters = if min_cluster_size <= 1 { n } else { 0usize };
+    let mut assigned = if min_cluster_size <= 1 { n } else { 0usize };
+
+    // Best-so-far, starting with the no-edge cut (threshold < min edge distance).
+    let mut best_thr = 0.0f32;
+    let mut best_clusters = clusters;
+    let mut best_assigned = assigned;
+    let mut best_diff = best_clusters.abs_diff(target_clusters);
+
+    for &(u, v, d) in &edges {
+        let ru = uf.find(u);
+        let rv = uf.find(v);
+        if ru == rv {
+            continue;
+        }
+
+        let (ru_sz, rv_sz) = (uf.size[ru], uf.size[rv]);
+        let before_clusters = usize::from(ru_sz >= min_cluster_size)
+            + usize::from(rv_sz >= min_cluster_size);
+        let before_assigned =
+            if ru_sz >= min_cluster_size { ru_sz } else { 0 }
+                + if rv_sz >= min_cluster_size { rv_sz } else { 0 };
+
+        let new_root = uf.union_roots(ru, rv);
+        let new_sz = uf.size[new_root];
+        let after_clusters = usize::from(new_sz >= min_cluster_size);
+        let after_assigned = if new_sz >= min_cluster_size { new_sz } else { 0 };
+
+        clusters = clusters + after_clusters - before_clusters;
+        assigned = assigned + after_assigned - before_assigned;
+
+        let diff = clusters.abs_diff(target_clusters);
+        if diff < best_diff
+            || (diff == best_diff && assigned > best_assigned)
+            || (diff == best_diff && assigned == best_assigned && clusters > best_clusters)
+        {
+            best_diff = diff;
+            best_clusters = clusters;
+            best_assigned = assigned;
+            best_thr = d;
+
+            // If we hit an exact match with no noise, prefer the smallest threshold that achieves it.
+            if best_diff == 0 && best_assigned == n {
+                break;
+            }
+        }
+    }
+
+    best_thr
 }
 
 fn layer_at_threshold(
@@ -696,5 +853,64 @@ mod tests {
                 .any(|g| g.len() == 2 && g.contains(&0) && g.contains(&1)),
             "expected points 0 and 1 to be flagged as duplicates"
         );
+    }
+
+    #[test]
+    fn evoc_layer_helpers() {
+        // Use a higher original dimension so the random projection is unlikely to
+        // collapse the separation between clusters.
+        let d = 16usize;
+
+        let mut p0 = vec![0.0f32; d];
+        let mut p1 = vec![0.0f32; d];
+        p1[0] = 0.1;
+        let mut p2 = vec![0.0f32; d];
+        p2[1] = 0.1;
+
+        let mut q0 = vec![1000.0f32; d];
+        let mut q1 = vec![1000.0f32; d];
+        q1[0] = 1000.1;
+        let mut q2 = vec![1000.0f32; d];
+        q2[1] = 1000.1;
+
+        let data = vec![p0, p1, p2, q0, q1, q2];
+
+        let mut evoc = EVoC::new(EVoCParams {
+            intermediate_dim: 15,
+            min_cluster_size: 2,
+            max_layers: 8,
+            noise_level: 0.2,
+            duplicate_threshold: 1e-6,
+            seed: Some(42),
+        });
+
+        // Exercise `fit` (stateful) + convenience accessors.
+        evoc.fit(&data).unwrap();
+        assert!(evoc.finest_layer().is_some());
+        assert!(evoc.coarsest_layer().is_some());
+        assert_eq!(evoc.labels_finest().unwrap().len(), data.len());
+        assert_eq!(evoc.labels_coarsest().unwrap().len(), data.len());
+
+        // Explicit threshold cut with no edges: all components are size 1 -> noise.
+        let layer0 = evoc.layer_at_threshold(0.0).unwrap();
+        assert_eq!(layer0.num_clusters, 0);
+        assert!(layer0.assignments.iter().all(|a| a.is_none()));
+
+        // Best-effort layer selection for a desired number of clusters.
+        let layer2 = evoc.layer_for_n_clusters(2).unwrap();
+        assert_eq!(layer2.num_clusters, 2);
+
+        let a0 = layer2.assignments[0].expect("point 0 should not be noise");
+        let a1 = layer2.assignments[1].expect("point 1 should not be noise");
+        let a2 = layer2.assignments[2].expect("point 2 should not be noise");
+        let b0 = layer2.assignments[3].expect("point 3 should not be noise");
+        let b1 = layer2.assignments[4].expect("point 4 should not be noise");
+        let b2 = layer2.assignments[5].expect("point 5 should not be noise");
+
+        assert_eq!(a0, a1);
+        assert_eq!(a1, a2);
+        assert_eq!(b0, b1);
+        assert_eq!(b1, b2);
+        assert_ne!(a0, b0);
     }
 }

@@ -107,6 +107,18 @@ impl Dbscan {
         self
     }
 
+    /// Fit and predict, returning labels where noise is marked as `None`.
+    ///
+    /// This is a convenience wrapper so callers don't need to import `DbscanExt`.
+    pub fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
+        <Self as DbscanExt>::fit_predict_with_noise(self, data)
+    }
+
+    /// Check whether a label is the DBSCAN noise sentinel.
+    pub fn is_noise(label: usize) -> bool {
+        label == NOISE
+    }
+
     /// Compute Euclidean distance between two points.
     #[inline]
     fn distance(a: &[f32], b: &[f32]) -> f32 {
@@ -420,7 +432,7 @@ mod tests {
 
         assert_eq!(labels.len(), 9);
         assert_eq!(labels[4], NOISE);
-        assert!(<Dbscan as DbscanExt>::is_noise(labels[4]));
+        assert!(Dbscan::is_noise(labels[4]));
     }
 
     #[test]

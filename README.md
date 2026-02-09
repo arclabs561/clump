@@ -52,7 +52,8 @@ assert!(!evoc.cluster_layers().is_empty());
 ## Notes
 
 - `Dbscan::fit_predict` returns a label for every point; noise points are assigned to a special
-  cluster (`clump::NOISE`). If you want `Option` labels, use `DbscanExt::fit_predict_with_noise`.
+  cluster (`clump::NOISE`). If you want `Option` labels, use `Dbscan::fit_predict_with_noise`
+  (or import the `DbscanExt` trait).
 - `Kmeans::fit` returns centroids + labels (`KmeansFit`), which you can reuse to `predict` labels
   for new points.
 - `docs.rs/clump` currently documents the latest crates.io release. If you depend on git main,
