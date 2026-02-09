@@ -40,10 +40,16 @@
 //! outliers (noise points). DBSCAN does not require specifying the number of
 //! clusters in advance.
 //!
+//! ### EVōC
+//!
+//! EVōC (Embedding Vector Oriented Clustering) is a hierarchical clustering approach aimed at
+//! embedding vectors. In addition to a single label vector, it can expose multiple cluster layers
+//! (different granularities), a cluster tree, and near-duplicate groups.
+//!
 //! ## Usage
 //!
 //! ```rust
-//! use clump::cluster::{Clustering, Dbscan, Kmeans};
+//! use clump::cluster::{Clustering, Dbscan, EVoC, EVoCParams, Kmeans};
 //!
 //! let data = vec![
 //!     vec![0.0, 0.0],
@@ -60,12 +66,24 @@
 //! // Density-based clustering with DBSCAN
 //! let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 //! assert_eq!(labels.len(), data.len());
+//!
+//! // Hierarchical clustering with EVōC (noise as `None`)
+//! let mut evoc = EVoC::new(EVoCParams {
+//!     intermediate_dim: 1,
+//!     min_cluster_size: 2,
+//!     seed: Some(42),
+//!     ..Default::default()
+//! });
+//! let labels = evoc.fit_predict(&data).unwrap();
+//! assert_eq!(labels.len(), data.len());
 //! ```
 
 mod dbscan;
+mod evoc;
 mod kmeans;
 mod traits;
 
 pub use dbscan::{Dbscan, DbscanExt, NOISE};
-pub use kmeans::Kmeans;
+pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
+pub use kmeans::{Kmeans, KmeansFit};
 pub use traits::Clustering;

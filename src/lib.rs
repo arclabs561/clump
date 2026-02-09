@@ -11,5 +11,8 @@
 pub mod cluster;
 pub mod error;
 
-pub use cluster::{Clustering, Dbscan, DbscanExt, Kmeans, NOISE};
+pub use cluster::{
+    ClusterHierarchy, ClusterLayer, ClusterNode, Clustering, Dbscan, DbscanExt, EVoC, EVoCParams,
+    Kmeans, KmeansFit, NOISE,
+};
 pub use error::{Error, Result};

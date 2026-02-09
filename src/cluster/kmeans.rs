@@ -77,6 +77,76 @@ pub struct Kmeans {
     seeding_alpha: f32,
 }
 
+/// Result of fitting k-means.
+#[derive(Debug, Clone)]
+pub struct KmeansFit {
+    /// Learned centroids (k x d).
+    pub centroids: Vec<Vec<f32>>,
+    /// One label per training point.
+    pub labels: Vec<usize>,
+    /// Number of Lloyd iterations executed.
+    pub iters: usize,
+}
+
+impl KmeansFit {
+    /// Predict cluster labels for new points using the learned centroids.
+    pub fn predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+        if data.is_empty() {
+            return Err(Error::EmptyInput);
+        }
+        if self.centroids.is_empty() {
+            return Err(Error::InvalidParameter {
+                name: "centroids",
+                message: "must be non-empty",
+            });
+        }
+
+        let d = self.centroids[0].len();
+        if d == 0 {
+            return Err(Error::InvalidParameter {
+                name: "dimension",
+                message: "must be at least 1",
+            });
+        }
+
+        for c in &self.centroids {
+            if c.len() != d {
+                return Err(Error::Other("centroid dimension mismatch".to_string()));
+            }
+        }
+
+        let mut out = Vec::with_capacity(data.len());
+        for point in data {
+            if point.len() != d {
+                return Err(Error::DimensionMismatch {
+                    expected: d,
+                    found: point.len(),
+                });
+            }
+
+            let mut best_cluster = 0usize;
+            let mut best_dist = f32::MAX;
+            for (k, centroid) in self.centroids.iter().enumerate() {
+                let dist = point
+                    .iter()
+                    .zip(centroid.iter())
+                    .map(|(a, b)| {
+                        let d = a - b;
+                        d * d
+                    })
+                    .sum::<f32>();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_cluster = k;
+                }
+            }
+            out.push(best_cluster);
+        }
+
+        Ok(out)
+    }
+}
+
 impl Kmeans {
     /// Create a new K-means clusterer.
     pub fn new(k: usize) -> Self {
@@ -116,84 +186,27 @@ impl Kmeans {
         self
     }
 
-    /// Initialize centroids using k-means++ algorithm.
-    fn init_centroids(&self, data: &Array2<f32>, rng: &mut impl Rng) -> Array2<f32> {
-        let n = data.nrows();
-        let d = data.ncols();
-        let mut centroids = Array2::zeros((self.k, d));
-
-        // First centroid: random point
-        let first = rng.random_range(0..n);
-        centroids.row_mut(0).assign(&data.row(first));
-
-        // Remaining centroids: k-means++ selection
-        for i in 1..self.k {
-            let mut distances: Vec<f32> = Vec::with_capacity(n);
-
-            for j in 0..n {
-                let point = data.row(j);
-                let min_dist = (0..i)
-                    .map(|c| {
-                        let centroid = centroids.row(c);
-                        point
-                            .iter()
-                            .zip(centroid.iter())
-                            .map(|(a, b)| (a - b).powi(2))
-                            .sum::<f32>()
-                    })
-                    .fold(f32::MAX, f32::min);
-                distances.push(min_dist);
-            }
-
-            // Sample proportional to distance^alpha.
-            // Note: distances currently contains D(x)^2.
-            // We want weights w(x) = D(x)^alpha.
-            // If alpha=2 (standard), w(x) = D(x)^2 = distances[j].
-            // General case: w(x) = (distances[j])^(alpha/2).
-            let weights: Vec<f32> = distances
-                .iter()
-                .map(|&d| d.powf(self.seeding_alpha / 2.0))
-                .collect();
-            let total: f32 = weights.iter().sum();
-
-            if total == 0.0 {
-                let idx = rng.random_range(0..n);
-                centroids.row_mut(i).assign(&data.row(idx));
-                continue;
-            }
-
-            let threshold = rng.random::<f32>() * total;
-            let mut cumsum = 0.0;
-            let mut selected = 0;
-
-            for (j, &w) in weights.iter().enumerate() {
-                cumsum += w;
-                if cumsum >= threshold {
-                    selected = j;
-                    break;
-                }
-            }
-
-            centroids.row_mut(i).assign(&data.row(selected));
-        }
-
-        centroids
-    }
-
-    /// Compute squared Euclidean distance.
-    fn squared_distance(a: &ndarray::ArrayView1<'_, f32>, b: &ndarray::ArrayView1<'_, f32>) -> f32 {
-        a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-    }
-}
-
-impl Clustering for Kmeans {
-    fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+    /// Fit k-means and return centroids, labels, and iteration count.
+    pub fn fit(&self, data: &[Vec<f32>]) -> Result<KmeansFit> {
         if data.is_empty() {
             return Err(Error::EmptyInput);
         }
 
+        if self.k == 0 {
+            return Err(Error::InvalidParameter {
+                name: "k",
+                message: "must be at least 1",
+            });
+        }
+
         let n = data.len();
         let d = data[0].len();
+        if d == 0 {
+            return Err(Error::InvalidParameter {
+                name: "dimension",
+                message: "must be at least 1",
+            });
+        }
 
         if self.k > n {
             return Err(Error::InvalidClusterCount {
@@ -226,7 +239,10 @@ impl Clustering for Kmeans {
         let mut centroids = self.init_centroids(&data_arr, &mut rng);
         let mut labels = vec![0usize; n];
 
-        for _iter in 0..self.max_iter {
+        let mut iters = 0usize;
+        for iter in 0..self.max_iter {
+            iters = iter + 1;
+
             // Assignment step - parallel when feature enabled
             #[cfg(feature = "parallel")]
             {
@@ -301,7 +317,91 @@ impl Clustering for Kmeans {
             }
         }
 
-        Ok(labels)
+        let mut centroids_vec = Vec::with_capacity(self.k);
+        for k in 0..self.k {
+            centroids_vec.push(centroids.row(k).to_vec());
+        }
+
+        Ok(KmeansFit {
+            centroids: centroids_vec,
+            labels,
+            iters,
+        })
+    }
+
+    /// Initialize centroids using k-means++ algorithm.
+    fn init_centroids(&self, data: &Array2<f32>, rng: &mut impl Rng) -> Array2<f32> {
+        let n = data.nrows();
+        let d = data.ncols();
+        let mut centroids = Array2::zeros((self.k, d));
+
+        // First centroid: random point
+        let first = rng.random_range(0..n);
+        centroids.row_mut(0).assign(&data.row(first));
+
+        // Remaining centroids: k-means++ selection
+        for i in 1..self.k {
+            let mut distances: Vec<f32> = Vec::with_capacity(n);
+
+            for j in 0..n {
+                let point = data.row(j);
+                let min_dist = (0..i)
+                    .map(|c| {
+                        let centroid = centroids.row(c);
+                        point
+                            .iter()
+                            .zip(centroid.iter())
+                            .map(|(a, b)| (a - b).powi(2))
+                            .sum::<f32>()
+                    })
+                    .fold(f32::MAX, f32::min);
+                distances.push(min_dist);
+            }
+
+            // Sample proportional to distance^alpha.
+            // Note: distances currently contains D(x)^2.
+            // We want weights w(x) = D(x)^alpha.
+            // If alpha=2 (standard), w(x) = D(x)^2 = distances[j].
+            // General case: w(x) = (distances[j])^(alpha/2).
+            let weights: Vec<f32> = distances
+                .iter()
+                .map(|&d| d.powf(self.seeding_alpha / 2.0))
+                .collect();
+            let total: f32 = weights.iter().sum();
+
+            if total == 0.0 {
+                let idx = rng.random_range(0..n);
+                centroids.row_mut(i).assign(&data.row(idx));
+                continue;
+            }
+
+            let threshold = rng.random::<f32>() * total;
+            let mut cumsum = 0.0;
+            let mut selected = 0;
+
+            for (j, &w) in weights.iter().enumerate() {
+                cumsum += w;
+                if cumsum >= threshold {
+                    selected = j;
+                    break;
+                }
+            }
+
+            centroids.row_mut(i).assign(&data.row(selected));
+        }
+
+        centroids
+    }
+
+    /// Compute squared Euclidean distance.
+    fn squared_distance(a: &ndarray::ArrayView1<'_, f32>, b: &ndarray::ArrayView1<'_, f32>) -> f32 {
+        a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
+    }
+}
+
+impl Clustering for Kmeans {
+    fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+        Ok(self.fit(data)?.labels)
     }
 
     fn n_clusters(&self) -> usize {

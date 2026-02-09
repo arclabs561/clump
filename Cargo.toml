@@ -3,7 +3,7 @@ name = "clump"
 version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Dense clustering primitives (k-means, DBSCAN)"
+description = "Dense clustering primitives (k-means, DBSCAN, EVōC)"
 repository = "https://github.com/arclabs561/clump"
 homepage = "https://github.com/arclabs561/clump"
 documentation = "https://docs.rs/clump"
@@ -21,5 +21,10 @@ default = []
 parallel = ["dep:rayon"]
 
 [dev-dependencies]
+criterion = "0.7"
 proptest = "1.9"
+
+[[bench]]
+name = "clustering"
+harness = false
 

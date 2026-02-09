@@ -234,16 +234,14 @@ impl Clustering for Dbscan {
 
         // Convert internal labels to the public `usize` representation.
         //
-        // For `fit_predict` we keep the historical behavior in this crate:
-        // noise points are placed in a final "noise cluster" so callers can treat
-        // labels as a partition without `Option`.
+        // Noise points are labeled with the sentinel `NOISE` (usize::MAX), matching
+        // `DbscanExt::is_noise` and the crate-level `clump::NOISE` constant.
         let mut out: Vec<usize> = Vec::with_capacity(n);
-        let noise_cluster = cluster_id as usize;
         for l in labels {
             if l >= 0 {
                 out.push(l as usize);
             } else {
-                out.push(noise_cluster);
+                out.push(NOISE);
             }
         }
 
@@ -397,6 +395,32 @@ mod tests {
                 assert!(label.is_some());
             }
         }
+    }
+
+    #[test]
+    fn test_dbscan_fit_predict_uses_noise_sentinel() {
+        // Same setup as `test_dbscan_with_noise`, but exercise `fit_predict`.
+        let data = vec![
+            // Cluster 1
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.0, 0.1],
+            vec![0.1, 0.1],
+            // Outlier
+            vec![100.0, 100.0],
+            // Cluster 2
+            vec![5.0, 5.0],
+            vec![5.1, 5.0],
+            vec![5.0, 5.1],
+            vec![5.1, 5.1],
+        ];
+
+        let dbscan = Dbscan::new(0.3, 3);
+        let labels = dbscan.fit_predict(&data).unwrap();
+
+        assert_eq!(labels.len(), 9);
+        assert_eq!(labels[4], NOISE);
+        assert!(<Dbscan as DbscanExt>::is_noise(labels[4]));
     }
 
     #[test]
