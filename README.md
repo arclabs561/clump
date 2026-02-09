@@ -10,7 +10,8 @@ Dual-licensed under MIT or Apache-2.0.
 
 ```toml
 [dependencies]
-clump = "0.1.0"
+# Git dependency (main). Pin `rev` for reproducibility.
+clump = { git = "https://github.com/arclabs561/clump" }
 ```
 
 ```rust
@@ -40,6 +41,8 @@ assert_eq!(labels.len(), data.len());
 
 - `Dbscan::fit_predict` returns a label for every point; noise points are assigned to a special
   cluster (`clump::NOISE`). If you want `Option` labels, use `DbscanExt::fit_predict_with_noise`.
+- `docs.rs/clump` currently documents the latest crates.io release. If you depend on git main,
+  prefer local rustdoc (`cargo doc --open`) for up-to-date docs.
 
 ## License
 

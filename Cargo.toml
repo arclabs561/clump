@@ -1,9 +1,9 @@
 [package]
 name = "clump"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Dense clustering primitives (k-means and related helpers)"
+description = "Dense clustering primitives (k-means, DBSCAN)"
 repository = "https://github.com/arclabs561/clump"
 homepage = "https://github.com/arclabs561/clump"
 documentation = "https://docs.rs/clump"
