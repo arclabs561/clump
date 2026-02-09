@@ -616,16 +616,19 @@ fn best_threshold_for_n_clusters(
         }
 
         let (ru_sz, rv_sz) = (uf.size[ru], uf.size[rv]);
-        let before_clusters = usize::from(ru_sz >= min_cluster_size)
-            + usize::from(rv_sz >= min_cluster_size);
-        let before_assigned =
-            if ru_sz >= min_cluster_size { ru_sz } else { 0 }
-                + if rv_sz >= min_cluster_size { rv_sz } else { 0 };
+        let before_clusters =
+            usize::from(ru_sz >= min_cluster_size) + usize::from(rv_sz >= min_cluster_size);
+        let before_assigned = if ru_sz >= min_cluster_size { ru_sz } else { 0 }
+            + if rv_sz >= min_cluster_size { rv_sz } else { 0 };
 
         let new_root = uf.union_roots(ru, rv);
         let new_sz = uf.size[new_root];
         let after_clusters = usize::from(new_sz >= min_cluster_size);
-        let after_assigned = if new_sz >= min_cluster_size { new_sz } else { 0 };
+        let after_assigned = if new_sz >= min_cluster_size {
+            new_sz
+        } else {
+            0
+        };
 
         clusters = clusters + after_clusters - before_clusters;
         assigned = assigned + after_assigned - before_assigned;
@@ -861,13 +864,13 @@ mod tests {
         // collapse the separation between clusters.
         let d = 16usize;
 
-        let mut p0 = vec![0.0f32; d];
+        let p0 = vec![0.0f32; d];
         let mut p1 = vec![0.0f32; d];
         p1[0] = 0.1;
         let mut p2 = vec![0.0f32; d];
         p2[1] = 0.1;
 
-        let mut q0 = vec![1000.0f32; d];
+        let q0 = vec![1000.0f32; d];
         let mut q1 = vec![1000.0f32; d];
         q1[0] = 1000.1;
         let mut q2 = vec![1000.0f32; d];
