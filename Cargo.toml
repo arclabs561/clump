@@ -27,4 +27,3 @@ proptest = "1.9"
 [[bench]]
 name = "clustering"
 harness = false
-
