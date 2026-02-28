@@ -40,6 +40,12 @@
 //! outliers (noise points). DBSCAN does not require specifying the number of
 //! clusters in advance.
 //!
+//! ### HDBSCAN
+//!
+//! Hierarchical extension of DBSCAN that removes the global epsilon parameter.
+//! Builds a density-based hierarchy and extracts the most stable clusters
+//! automatically. Handles varying-density clusters that DBSCAN struggles with.
+//!
 //! ### EVōC
 //!
 //! EVōC (Embedding Vector Oriented Clustering) is a hierarchical clustering approach aimed at
@@ -80,10 +86,13 @@
 
 mod dbscan;
 mod evoc;
+mod hdbscan;
 mod kmeans;
 mod traits;
+mod util;
 
 pub use dbscan::{Dbscan, DbscanExt, NOISE};
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
+pub use hdbscan::Hdbscan;
 pub use kmeans::{Kmeans, KmeansFit};
 pub use traits::Clustering;

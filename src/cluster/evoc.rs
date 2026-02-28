@@ -21,6 +21,7 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::too_many_lines)]
 
+use super::util::{self, UnionFind};
 use crate::error::{Error, Result};
 use rand::prelude::*;
 use std::collections::HashMap;
@@ -452,14 +453,7 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 
 #[inline]
 fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| {
-            let d = x - y;
-            d * d
-        })
-        .sum()
+    util::squared_euclidean(a, b)
 }
 
 /// Compute an MST for a dense complete graph using Prim's algorithm.
@@ -750,50 +744,6 @@ fn detect_duplicates(
     out
 }
 
-#[derive(Clone, Debug)]
-struct UnionFind {
-    parent: Vec<usize>,
-    size: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).collect(),
-            size: vec![1; n],
-        }
-    }
-
-    fn find(&mut self, x: usize) -> usize {
-        if self.parent[x] != x {
-            let root = self.find(self.parent[x]);
-            self.parent[x] = root;
-        }
-        self.parent[x]
-    }
-
-    fn union(&mut self, a: usize, b: usize) -> usize {
-        let ra = self.find(a);
-        let rb = self.find(b);
-        self.union_roots(ra, rb)
-    }
-
-    fn union_roots(&mut self, ra: usize, rb: usize) -> usize {
-        if ra == rb {
-            return ra;
-        }
-
-        // Union by size.
-        let (mut big, mut small) = (ra, rb);
-        if self.size[big] < self.size[small] {
-            std::mem::swap(&mut big, &mut small);
-        }
-
-        self.parent[small] = big;
-        self.size[big] += self.size[small];
-        big
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -13,6 +13,6 @@ pub mod error;
 
 pub use cluster::{
     ClusterHierarchy, ClusterLayer, ClusterNode, Clustering, Dbscan, DbscanExt, EVoC, EVoCParams,
-    Kmeans, KmeansFit, NOISE,
+    Hdbscan, Kmeans, KmeansFit, NOISE,
 };
 pub use error::{Error, Result};
