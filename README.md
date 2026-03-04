@@ -1,6 +1,8 @@
 # clump
 
+[![crates.io](https://img.shields.io/crates/v/clump.svg)](https://crates.io/crates/clump)
 [![Documentation](https://docs.rs/clump/badge.svg)](https://docs.rs/clump)
+[![CI](https://github.com/arclabs561/clump/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/clump/actions/workflows/ci.yml)
 
 Dense clustering primitives (k-means, DBSCAN, EVōC).
 
