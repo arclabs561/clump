@@ -744,7 +744,6 @@ fn detect_duplicates(
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

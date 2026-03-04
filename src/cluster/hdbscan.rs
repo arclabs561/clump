@@ -187,17 +187,13 @@ fn mutual_reachability(dist: f32, core_i: f32, core_j: f32) -> f32 {
 /// - A point falling out of a cluster (child is a point index, child_size = 1)
 /// - A cluster splitting into a child cluster (child is a cluster id, child_size > 1)
 struct CondensedEdge {
-    parent: usize,   // cluster id
-    child: usize,    // point index or cluster id
-    lambda: f64,     // 1/distance at which this happened
+    parent: usize, // cluster id
+    child: usize,  // point index or cluster id
+    lambda: f64,   // 1/distance at which this happened
     child_size: usize,
 }
 
-fn extract_clusters(
-    mst: &[(usize, usize, f32)],
-    n: usize,
-    min_cluster_size: usize,
-) -> Vec<usize> {
+fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usize) -> Vec<usize> {
     if n == 1 {
         return vec![NOISE];
     }
@@ -216,7 +212,11 @@ fn extract_clusters(
             continue;
         }
 
-        let lambda = if dist > 0.0 { 1.0 / dist as f64 } else { f64::INFINITY };
+        let lambda = if dist > 0.0 {
+            1.0 / dist as f64
+        } else {
+            f64::INFINITY
+        };
         let ru_size = uf.size[ru];
         let rv_size = uf.size[rv];
 
@@ -488,9 +488,7 @@ mod tests {
         let mut data = make_cluster(&[0.0, 0.0], 20, 0.5);
         data.extend(make_cluster(&[20.0, 20.0], 20, 0.5));
 
-        let hdbscan = Hdbscan::new()
-            .with_min_samples(3)
-            .with_min_cluster_size(10);
+        let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(10);
         let labels = hdbscan.fit_predict(&data).unwrap();
 
         assert_eq!(labels.len(), 40);
@@ -518,9 +516,7 @@ mod tests {
         let mut data = make_cluster(&[0.0, 0.0], 30, 0.3);
         data.extend(make_cluster(&[50.0, 50.0], 30, 3.0));
 
-        let hdbscan = Hdbscan::new()
-            .with_min_samples(3)
-            .with_min_cluster_size(5);
+        let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(5);
         let labels = hdbscan.fit_predict(&data).unwrap();
 
         let dense_non_noise = labels[..30].iter().filter(|&&l| l != NOISE).count();
@@ -544,9 +540,7 @@ mod tests {
         data.push(vec![8.0, 12.0]);
         data.push(vec![12.0, 8.0]);
 
-        let hdbscan = Hdbscan::new()
-            .with_min_samples(3)
-            .with_min_cluster_size(5);
+        let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(5);
         let labels = hdbscan.fit_predict(&data).unwrap();
 
         // In HDBSCAN, noise points that are absorbed into a cluster before the
@@ -564,9 +558,7 @@ mod tests {
 
         // Use min_cluster_size > n/2 to prevent internal splits from creating
         // two sub-clusters within the single spatial group.
-        let hdbscan = Hdbscan::new()
-            .with_min_samples(3)
-            .with_min_cluster_size(15);
+        let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(15);
         let labels = hdbscan.fit_predict(&data).unwrap();
 
         let non_noise: Vec<usize> = labels.iter().copied().filter(|&l| l != NOISE).collect();
@@ -580,11 +572,7 @@ mod tests {
 
     #[test]
     fn all_noise_high_min_cluster_size() {
-        let data = vec![
-            vec![0.0, 0.0],
-            vec![10.0, 10.0],
-            vec![20.0, 20.0],
-        ];
+        let data = vec![vec![0.0, 0.0], vec![10.0, 10.0], vec![20.0, 20.0]];
 
         let hdbscan = Hdbscan::new()
             .with_min_samples(2)
@@ -637,16 +625,17 @@ mod tests {
         let mut data = make_cluster(&[0.0, 0.0], 15, 0.3);
         data.push(vec![100.0, 100.0]);
 
-        let hdbscan = Hdbscan::new()
-            .with_min_samples(3)
-            .with_min_cluster_size(5);
+        let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(5);
         let labels = hdbscan.fit_predict_with_noise(&data).unwrap();
 
         assert_eq!(labels.len(), 16);
         // The distant outlier may or may not be noise depending on when it merges.
         // But the cluster points should be labeled.
         let cluster_labels: Vec<_> = labels[..15].iter().filter_map(|l| *l).collect();
-        assert!(!cluster_labels.is_empty(), "cluster should have labeled points");
+        assert!(
+            !cluster_labels.is_empty(),
+            "cluster should have labeled points"
+        );
     }
 
     #[test]

@@ -59,7 +59,10 @@ pub(crate) fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// `dist_fn(i, j)` returns the edge weight between points `i` and `j`.
 /// Returns edges `(u, v, dist)`.
-pub(crate) fn prim_mst(n: usize, dist_fn: impl Fn(usize, usize) -> f32) -> Vec<(usize, usize, f32)> {
+pub(crate) fn prim_mst(
+    n: usize,
+    dist_fn: impl Fn(usize, usize) -> f32,
+) -> Vec<(usize, usize, f32)> {
     if n <= 1 {
         return Vec::new();
     }

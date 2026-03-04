@@ -27,7 +27,10 @@ fn main() {
     let labels = kmeans.fit_predict(&data).unwrap();
     println!("=== K-means (k=3) ===");
     for (i, label) in labels.iter().enumerate() {
-        println!("  point {:2} ({:5.1}, {:5.1}) => cluster {}", i, data[i][0], data[i][1], label);
+        println!(
+            "  point {:2} ({:5.1}, {:5.1}) => cluster {}",
+            i, data[i][0], data[i][1], label
+        );
     }
 
     // --- DBSCAN (eps=1.0, min_pts=2) ---
@@ -40,7 +43,10 @@ fn main() {
         } else {
             format!("cluster {}", label)
         };
-        println!("  point {:2} ({:5.1}, {:5.1}) => {}", i, data[i][0], data[i][1], tag);
+        println!(
+            "  point {:2} ({:5.1}, {:5.1}) => {}",
+            i, data[i][0], data[i][1], tag
+        );
     }
 
     // --- HDBSCAN ---
@@ -53,6 +59,9 @@ fn main() {
         } else {
             format!("cluster {}", label)
         };
-        println!("  point {:2} ({:5.1}, {:5.1}) => {}", i, data[i][0], data[i][1], tag);
+        println!(
+            "  point {:2} ({:5.1}, {:5.1}) => {}",
+            i, data[i][0], data[i][1], tag
+        );
     }
 }
