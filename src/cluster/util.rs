@@ -43,18 +43,6 @@ impl UnionFind {
     }
 }
 
-#[inline]
-pub(crate) fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| {
-            let d = x - y;
-            d * d
-        })
-        .sum()
-}
-
 /// Compute an MST for a dense complete graph using Prim's algorithm.
 ///
 /// `dist_fn(i, j)` returns the edge weight between points `i` and `j`.

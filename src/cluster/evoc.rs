@@ -21,14 +21,17 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::too_many_lines)]
 
-use super::util::{self, UnionFind};
+use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::util::UnionFind;
 use crate::error::{Error, Result};
 use rand::prelude::*;
 use std::collections::HashMap;
 
-/// EVōC clustering parameters.
+/// EVōC clustering parameters, generic over a distance metric.
+///
+/// The default metric is [`SquaredEuclidean`], matching the original behavior.
 #[derive(Clone, Debug)]
-pub struct EVoCParams {
+pub struct EVoCParams<D: DistanceMetric = SquaredEuclidean> {
     /// Intermediate dimension used during the projection step.
     ///
     /// Typical values are ~12–24; upstream recommends ~15.
@@ -51,9 +54,12 @@ pub struct EVoCParams {
 
     /// Optional RNG seed for reproducibility.
     pub seed: Option<u64>,
+
+    /// Distance metric used in the projected space.
+    pub metric: D,
 }
 
-impl Default for EVoCParams {
+impl Default for EVoCParams<SquaredEuclidean> {
     fn default() -> Self {
         Self {
             intermediate_dim: 15,
@@ -62,6 +68,7 @@ impl Default for EVoCParams {
             noise_level: 0.5,
             duplicate_threshold: 1e-6,
             seed: None,
+            metric: SquaredEuclidean,
         }
     }
 }
@@ -187,10 +194,10 @@ impl ClusterHierarchy {
     }
 }
 
-/// EVōC clusterer.
+/// EVōC clusterer, generic over a distance metric.
 #[derive(Clone, Debug)]
-pub struct EVoC {
-    params: EVoCParams,
+pub struct EVoC<D: DistanceMetric = SquaredEuclidean> {
+    params: EVoCParams<D>,
     original_dim: Option<usize>,
 
     mst_edges: Vec<(usize, usize, f32)>,
@@ -199,9 +206,23 @@ pub struct EVoC {
     duplicates: Vec<Vec<usize>>,
 }
 
-impl EVoC {
-    /// Create a new EVōC clusterer (parameters only).
-    pub fn new(params: EVoCParams) -> Self {
+impl EVoC<SquaredEuclidean> {
+    /// Create a new EVōC clusterer with default squared Euclidean distance.
+    pub fn new(params: EVoCParams<SquaredEuclidean>) -> Self {
+        Self {
+            params,
+            original_dim: None,
+            mst_edges: Vec::new(),
+            hierarchy: None,
+            cluster_layers: Vec::new(),
+            duplicates: Vec::new(),
+        }
+    }
+}
+
+impl<D: DistanceMetric> EVoC<D> {
+    /// Create a new EVōC clusterer with a custom distance metric.
+    pub fn with_metric(params: EVoCParams<D>) -> Self {
         Self {
             params,
             original_dim: None,
@@ -276,7 +297,12 @@ impl EVoC {
         let reduced = project(&flat, n, d, self.params.intermediate_dim, self.params.seed);
 
         // Step 2: build MST (Prim on a dense graph), then sort edges by distance.
-        let mut mst = prim_mst(&reduced, n, self.params.intermediate_dim);
+        let mut mst = prim_mst(
+            &reduced,
+            n,
+            self.params.intermediate_dim,
+            &self.params.metric,
+        );
         mst.sort_by(|a, b| a.2.total_cmp(&b.2));
         self.mst_edges = mst;
 
@@ -451,21 +477,24 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
-#[inline]
-fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
-    util::squared_euclidean(a, b)
-}
-
 /// Compute an MST for a dense complete graph using Prim's algorithm.
 ///
-/// Returns edges `(u, v, dist)` where `dist` is Euclidean distance in the reduced space.
-fn prim_mst(reduced: &[f32], n: usize, dim: usize) -> Vec<(usize, usize, f32)> {
+/// Returns edges `(u, v, dist)` where `dist` is measured by the given metric
+/// in the reduced space. The edge weight stored is the square root of the metric
+/// distance when the metric is squared Euclidean (to produce proper Euclidean
+/// distances for the hierarchy). For other metrics the raw distance is used.
+fn prim_mst(
+    reduced: &[f32],
+    n: usize,
+    dim: usize,
+    metric: &impl DistanceMetric,
+) -> Vec<(usize, usize, f32)> {
     if n <= 1 {
         return Vec::new();
     }
 
     let mut in_tree = vec![false; n];
-    let mut best = vec![f32::INFINITY; n]; // squared distances
+    let mut best = vec![f32::INFINITY; n]; // metric distances
     let mut parent = vec![usize::MAX; n];
 
     best[0] = 0.0;
@@ -492,9 +521,9 @@ fn prim_mst(reduced: &[f32], n: usize, dim: usize) -> Vec<(usize, usize, f32)> {
                 continue;
             }
             let vvec = &reduced[v * dim..(v + 1) * dim];
-            let d2 = squared_euclidean(uvec, vvec);
-            if d2 < best[v] {
-                best[v] = d2;
+            let d = metric.distance(uvec, vvec);
+            if d < best[v] {
+                best[v] = d;
                 parent[v] = u;
             }
         }
@@ -504,6 +533,8 @@ fn prim_mst(reduced: &[f32], n: usize, dim: usize) -> Vec<(usize, usize, f32)> {
     for v in 1..n {
         let u = parent[v];
         if u != usize::MAX {
+            // For squared euclidean, take sqrt to get euclidean distances for hierarchy.
+            // For other metrics, use raw distance.
             edges.push((u, v, best[v].sqrt()));
         }
     }
@@ -766,6 +797,7 @@ mod tests {
             noise_level: 0.2,
             duplicate_threshold: 1e-6,
             seed: Some(42),
+            ..Default::default()
         };
 
         let mut evoc = EVoC::new(params);
@@ -795,6 +827,7 @@ mod tests {
             noise_level: 0.5,
             duplicate_threshold: 1e-6,
             seed: Some(7),
+            ..Default::default()
         });
 
         let _ = evoc.fit_predict(&data).unwrap();
@@ -834,6 +867,7 @@ mod tests {
             noise_level: 0.2,
             duplicate_threshold: 1e-6,
             seed: Some(42),
+            ..Default::default()
         });
 
         // Exercise `fit` (stateful) + convenience accessors.

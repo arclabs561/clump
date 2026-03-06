@@ -40,25 +40,40 @@
 //! Campello, R. J. G. B., Moulavi, D., Sander, J. (2013). "Density-Based Clustering
 //! Based on Hierarchical Density Estimates." PAKDD 2013.
 
+use super::distance::{DistanceMetric, Euclidean};
 use super::traits::Clustering;
 use super::util::{self, UnionFind};
 use crate::error::{Error, Result};
 
 use super::dbscan::NOISE;
 
-/// HDBSCAN clustering algorithm.
+/// HDBSCAN clustering algorithm, generic over a distance metric.
+///
+/// The default metric is [`Euclidean`] (L2), matching the original behavior.
 #[derive(Debug, Clone)]
-pub struct Hdbscan {
+pub struct Hdbscan<D: DistanceMetric = Euclidean> {
     min_samples: usize,
     min_cluster_size: usize,
+    metric: D,
 }
 
-impl Hdbscan {
+impl Hdbscan<Euclidean> {
     /// Create a new HDBSCAN clusterer with default parameters.
     ///
     /// Defaults: `min_samples = 5`, `min_cluster_size = 5`.
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+impl<D: DistanceMetric> Hdbscan<D> {
+    /// Create a new HDBSCAN clusterer with a custom distance metric.
+    pub fn with_metric(metric: D) -> Self {
+        Self {
+            min_samples: 5,
+            min_cluster_size: 5,
+            metric,
+        }
     }
 
     /// Set `min_samples` (k for core distance computation).
@@ -83,16 +98,17 @@ impl Hdbscan {
     }
 }
 
-impl Default for Hdbscan {
+impl Default for Hdbscan<Euclidean> {
     fn default() -> Self {
         Self {
             min_samples: 5,
             min_cluster_size: 5,
+            metric: Euclidean,
         }
     }
 }
 
-impl Clustering for Hdbscan {
+impl<D: DistanceMetric> Clustering for Hdbscan<D> {
     fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         let n = data.len();
         if n == 0 {
@@ -129,7 +145,7 @@ impl Clustering for Hdbscan {
             }
         }
 
-        let dists = pairwise_distances(data);
+        let dists = pairwise_distances(data, &self.metric);
         let core_dists = core_distances(&dists, n, self.min_samples);
 
         let mut mst = util::prim_mst(n, |i, j| {
@@ -145,12 +161,12 @@ impl Clustering for Hdbscan {
     }
 }
 
-fn pairwise_distances(data: &[Vec<f32>]) -> Vec<f32> {
+fn pairwise_distances(data: &[Vec<f32>], metric: &impl DistanceMetric) -> Vec<f32> {
     let n = data.len();
     let mut dists = vec![0.0f32; n * n];
     for i in 0..n {
         for j in (i + 1)..n {
-            let d = util::squared_euclidean(&data[i], &data[j]).sqrt();
+            let d = metric.distance(&data[i], &data[j]);
             dists[i * n + j] = d;
             dists[j * n + i] = d;
         }
@@ -671,5 +687,23 @@ mod tests {
         let hdbscan = Hdbscan::new();
         let result = hdbscan.fit_predict(&data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn with_custom_metric() {
+        use crate::cluster::distance::SquaredEuclidean;
+
+        let mut data = make_cluster(&[0.0, 0.0], 20, 0.5);
+        data.extend(make_cluster(&[20.0, 20.0], 20, 0.5));
+
+        let hdbscan = Hdbscan::with_metric(SquaredEuclidean)
+            .with_min_samples(3)
+            .with_min_cluster_size(10);
+        let labels = hdbscan.fit_predict(&data).unwrap();
+
+        assert_eq!(labels.len(), 40);
+        let non_noise: std::collections::HashSet<usize> =
+            labels.iter().copied().filter(|&l| l != NOISE).collect();
+        assert!(non_noise.len() >= 2, "should find at least 2 clusters");
     }
 }

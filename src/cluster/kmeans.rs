@@ -53,17 +53,20 @@
 //!
 //! This crate implements standard Lloyd's algorithm with **k-means++** ($\alpha=2$).
 
+use super::distance::{DistanceMetric, SquaredEuclidean};
 use super::traits::Clustering;
 use crate::error::{Error, Result};
 use ndarray::Array2;
 use rand::prelude::*;
-
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// K-means clustering algorithm.
+/// K-means clustering algorithm, generic over a distance metric.
+///
+/// The default metric is [`SquaredEuclidean`], which preserves backward
+/// compatibility with previous versions.
 #[derive(Debug, Clone)]
-pub struct Kmeans {
+pub struct Kmeans<D: DistanceMetric = SquaredEuclidean> {
     /// Number of clusters.
     k: usize,
     /// Maximum iterations.
@@ -75,20 +78,23 @@ pub struct Kmeans {
     /// Seeding alpha (exponent for k-means++). Default 2.0 (standard).
     /// α > 2 (e.g. 4.0) can improve final cost (Bamas et al. 2023).
     seeding_alpha: f32,
+    /// Distance metric.
+    metric: D,
 }
 
-/// Result of fitting k-means.
+/// Result of fitting k-means, generic over a distance metric.
 #[derive(Debug, Clone)]
-pub struct KmeansFit {
+pub struct KmeansFit<D: DistanceMetric = SquaredEuclidean> {
     /// Learned centroids (k x d).
     pub centroids: Vec<Vec<f32>>,
     /// One label per training point.
     pub labels: Vec<usize>,
     /// Number of Lloyd iterations executed.
     pub iters: usize,
+    metric: D,
 }
 
-impl KmeansFit {
+impl<D: DistanceMetric> KmeansFit<D> {
     /// Predict cluster labels for new points using the learned centroids.
     pub fn predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         if data.is_empty() {
@@ -127,14 +133,7 @@ impl KmeansFit {
             let mut best_cluster = 0usize;
             let mut best_dist = f32::MAX;
             for (k, centroid) in self.centroids.iter().enumerate() {
-                let dist = point
-                    .iter()
-                    .zip(centroid.iter())
-                    .map(|(a, b)| {
-                        let d = a - b;
-                        d * d
-                    })
-                    .sum::<f32>();
+                let dist = self.metric.distance(point, centroid);
                 if dist < best_dist {
                     best_dist = dist;
                     best_cluster = k;
@@ -147,8 +146,8 @@ impl KmeansFit {
     }
 }
 
-impl Kmeans {
-    /// Create a new K-means clusterer.
+impl Kmeans<SquaredEuclidean> {
+    /// Create a new K-means clusterer with the default squared Euclidean distance.
     pub fn new(k: usize) -> Self {
         Self {
             k,
@@ -156,6 +155,21 @@ impl Kmeans {
             tol: 1e-4,
             seed: None,
             seeding_alpha: 2.0,
+            metric: SquaredEuclidean,
+        }
+    }
+}
+
+impl<D: DistanceMetric> Kmeans<D> {
+    /// Create a new K-means clusterer with a custom distance metric.
+    pub fn with_metric(k: usize, metric: D) -> Self {
+        Self {
+            k,
+            max_iter: 100,
+            tol: 1e-4,
+            seed: None,
+            seeding_alpha: 2.0,
+            metric,
         }
     }
 
@@ -187,7 +201,7 @@ impl Kmeans {
     }
 
     /// Fit k-means and return centroids, labels, and iteration count.
-    pub fn fit(&self, data: &[Vec<f32>]) -> Result<KmeansFit> {
+    pub fn fit(&self, data: &[Vec<f32>]) -> Result<KmeansFit<D>> {
         if data.is_empty() {
             return Err(Error::EmptyInput);
         }
@@ -247,13 +261,17 @@ impl Kmeans {
             #[cfg(feature = "parallel")]
             {
                 let centroids_ref = &centroids;
+                let metric = &self.metric;
                 labels.par_iter_mut().enumerate().for_each(|(i, label)| {
                     let point = data_arr.row(i);
+                    let point_slice = point.as_slice().unwrap();
                     let mut best_cluster = 0;
                     let mut best_dist = f32::MAX;
 
                     for k in 0..self.k {
-                        let dist = Self::squared_distance(&point, &centroids_ref.row(k));
+                        let centroid = centroids_ref.row(k);
+                        let centroid_slice = centroid.as_slice().unwrap();
+                        let dist = metric.distance(point_slice, centroid_slice);
                         if dist < best_dist {
                             best_dist = dist;
                             best_cluster = k;
@@ -266,11 +284,14 @@ impl Kmeans {
             #[cfg(not(feature = "parallel"))]
             for (i, label) in labels.iter_mut().enumerate() {
                 let point = data_arr.row(i);
+                let point_slice = point.as_slice().unwrap();
                 let mut best_cluster = 0;
                 let mut best_dist = f32::MAX;
 
                 for k in 0..self.k {
-                    let dist = Self::squared_distance(&point, &centroids.row(k));
+                    let centroid = centroids.row(k);
+                    let centroid_slice = centroid.as_slice().unwrap();
+                    let dist = self.metric.distance(point_slice, centroid_slice);
                     if dist < best_dist {
                         best_dist = dist;
                         best_cluster = k;
@@ -326,6 +347,7 @@ impl Kmeans {
             centroids: centroids_vec,
             labels,
             iters,
+            metric: self.metric.clone(),
         })
     }
 
@@ -345,24 +367,23 @@ impl Kmeans {
 
             for j in 0..n {
                 let point = data.row(j);
+                let point_slice = point.as_slice().unwrap();
                 let min_dist = (0..i)
                     .map(|c| {
                         let centroid = centroids.row(c);
-                        point
-                            .iter()
-                            .zip(centroid.iter())
-                            .map(|(a, b)| (a - b).powi(2))
-                            .sum::<f32>()
+                        let centroid_slice = centroid.as_slice().unwrap();
+                        self.metric.distance(point_slice, centroid_slice)
                     })
                     .fold(f32::MAX, f32::min);
                 distances.push(min_dist);
             }
 
             // Sample proportional to distance^alpha.
-            // Note: distances currently contains D(x)^2.
-            // We want weights w(x) = D(x)^alpha.
-            // If alpha=2 (standard), w(x) = D(x)^2 = distances[j].
-            // General case: w(x) = (distances[j])^(alpha/2).
+            // Note: distances currently contains D(x) as measured by the metric.
+            // For standard k-means++ with squared Euclidean, this is already D(x)^2.
+            // General case: w(x) = distances[j]^(alpha/2).
+            // When metric is SquaredEuclidean and alpha=2, this gives D(x)^1 = D(x),
+            // which matches the standard behavior since distances already contain D(x)^2.
             let weights: Vec<f32> = distances
                 .iter()
                 .map(|&d| d.powf(self.seeding_alpha / 2.0))
@@ -392,14 +413,9 @@ impl Kmeans {
 
         centroids
     }
-
-    /// Compute squared Euclidean distance.
-    fn squared_distance(a: &ndarray::ArrayView1<'_, f32>, b: &ndarray::ArrayView1<'_, f32>) -> f32 {
-        a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum()
-    }
 }
 
-impl Clustering for Kmeans {
+impl<D: DistanceMetric> Clustering for Kmeans<D> {
     fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         Ok(self.fit(data)?.labels)
     }
@@ -412,6 +428,7 @@ impl Clustering for Kmeans {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::distance::Euclidean;
 
     #[test]
     fn test_kmeans_basic() {
@@ -535,5 +552,40 @@ mod tests {
         assert_eq!(labels[0], labels[1]);
         assert_eq!(labels[2], labels[3]);
         assert_ne!(labels[0], labels[2]);
+    }
+
+    #[test]
+    fn test_kmeans_with_euclidean() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+
+        let kmeans = Kmeans::with_metric(2, Euclidean).with_seed(42);
+        let labels = kmeans.fit_predict(&data).unwrap();
+
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[2], labels[3]);
+        assert_ne!(labels[0], labels[2]);
+    }
+
+    #[test]
+    fn test_kmeans_fit_predict_with_custom_metric() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+
+        let kmeans = Kmeans::with_metric(2, Euclidean).with_seed(42);
+        let fit = kmeans.fit(&data).unwrap();
+
+        // Predict on new data
+        let new_data = vec![vec![0.05, 0.05], vec![10.05, 10.05]];
+        let predicted = fit.predict(&new_data).unwrap();
+        assert_ne!(predicted[0], predicted[1]);
     }
 }

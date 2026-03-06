@@ -58,16 +58,22 @@
 //!   default for density clustering (Campello et al., 2013).
 //!   (Planned for future versions of `clump`).
 
+use super::distance::{DistanceMetric, Euclidean};
 use super::traits::Clustering;
 use crate::error::{Error, Result};
 
-/// DBSCAN clustering algorithm.
+/// DBSCAN clustering algorithm, generic over a distance metric.
+///
+/// The default metric is [`Euclidean`] (L2), matching the original behavior
+/// where epsilon is compared against Euclidean distance.
 #[derive(Debug, Clone)]
-pub struct Dbscan {
+pub struct Dbscan<D: DistanceMetric = Euclidean> {
     /// Epsilon: maximum distance for neighborhood.
     epsilon: f32,
     /// Minimum points for core point classification.
     min_pts: usize,
+    /// Distance metric.
+    metric: D,
 }
 
 /// Labels from DBSCAN clustering.
@@ -79,8 +85,8 @@ pub const NOISE: usize = usize::MAX;
 const UNCLASSIFIED: i32 = -2;
 const NOISE_LABEL: i32 = -1;
 
-impl Dbscan {
-    /// Create a new DBSCAN clusterer.
+impl Dbscan<Euclidean> {
+    /// Create a new DBSCAN clusterer with the default Euclidean distance.
     ///
     /// # Arguments
     ///
@@ -92,7 +98,22 @@ impl Dbscan {
     /// - `epsilon`: Often determined by k-distance plot (k = min_pts - 1).
     /// - `min_pts`: 2 * dimension is a common heuristic. Minimum is 3.
     pub fn new(epsilon: f32, min_pts: usize) -> Self {
-        Self { epsilon, min_pts }
+        Self {
+            epsilon,
+            min_pts,
+            metric: Euclidean,
+        }
+    }
+}
+
+impl<D: DistanceMetric> Dbscan<D> {
+    /// Create a new DBSCAN clusterer with a custom distance metric.
+    pub fn with_metric(epsilon: f32, min_pts: usize, metric: D) -> Self {
+        Self {
+            epsilon,
+            min_pts,
+            metric,
+        }
     }
 
     /// Set epsilon (neighborhood radius).
@@ -119,23 +140,13 @@ impl Dbscan {
         label == NOISE
     }
 
-    /// Compute Euclidean distance between two points.
-    #[inline]
-    fn distance(a: &[f32], b: &[f32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-
     /// Find all neighbors within epsilon.
     fn region_query(&self, data: &[Vec<f32>], point_idx: usize) -> Vec<usize> {
         let point = &data[point_idx];
         data.iter()
             .enumerate()
             .filter(|(idx, other)| {
-                *idx != point_idx && Self::distance(point, other) <= self.epsilon
+                *idx != point_idx && self.metric.distance(point, other) <= self.epsilon
             })
             .map(|(idx, _)| idx)
             .collect()
@@ -185,13 +196,13 @@ impl Dbscan {
     }
 }
 
-impl Default for Dbscan {
+impl Default for Dbscan<Euclidean> {
     fn default() -> Self {
         Self::new(0.5, 5)
     }
 }
 
-impl Clustering for Dbscan {
+impl<D: DistanceMetric> Clustering for Dbscan<D> {
     fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         let n = data.len();
         if n == 0 {
@@ -279,7 +290,7 @@ pub trait DbscanExt {
     }
 }
 
-impl DbscanExt for Dbscan {
+impl<D: DistanceMetric> DbscanExt for Dbscan<D> {
     fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
         let n = data.len();
         if n == 0 {
@@ -432,7 +443,7 @@ mod tests {
 
         assert_eq!(labels.len(), 9);
         assert_eq!(labels[4], NOISE);
-        assert!(Dbscan::is_noise(labels[4]));
+        assert!(Dbscan::<Euclidean>::is_noise(labels[4]));
     }
 
     #[test]
@@ -511,5 +522,29 @@ mod tests {
         for label in labels {
             assert_eq!(label, cluster);
         }
+    }
+
+    #[test]
+    fn test_dbscan_with_custom_metric() {
+        use crate::cluster::distance::SquaredEuclidean;
+
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.0, 0.1],
+            vec![0.1, 0.1],
+            vec![5.0, 5.0],
+            vec![5.1, 5.0],
+            vec![5.0, 5.1],
+            vec![5.1, 5.1],
+        ];
+
+        // With squared Euclidean, epsilon needs to be squared too
+        let dbscan = Dbscan::with_metric(0.09, 3, SquaredEuclidean);
+        let labels = dbscan.fit_predict(&data).unwrap();
+
+        assert_eq!(labels.len(), 8);
+        assert_eq!(labels[0], labels[1]);
+        assert_ne!(labels[0], labels[4]);
     }
 }
