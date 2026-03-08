@@ -13,8 +13,9 @@ pub mod error;
 
 pub use cluster::{
     ClusterHierarchy, ClusterLayer, ClusterNode, Clustering, CompositeDistance,
-    ConstrainedClustering, Constraint, CopKmeans, CosineDistance, Dbscan, DbscanExt,
-    DistanceMetric, EVoC, EVoCParams, Euclidean, Hdbscan, InnerProductDistance, Kmeans, KmeansFit,
-    MiniBatchKmeans, SquaredEuclidean, StreamingClustering, NOISE,
+    ConstrainedClustering, Constraint, CopKmeans, CorrelationClustering, CorrelationResult,
+    CosineDistance, Dbscan, DbscanExt, DenStream, DistanceMetric, EVoC, EVoCParams, Euclidean,
+    Hdbscan, InnerProductDistance, Kmeans, KmeansFit, MiniBatchKmeans, SignedEdge,
+    SquaredEuclidean, StreamingClustering, NOISE,
 };
 pub use error::{Error, Result};

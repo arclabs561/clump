@@ -85,7 +85,9 @@
 //! ```
 
 pub mod constrained;
+pub mod correlation;
 mod dbscan;
+pub mod denstream;
 pub mod distance;
 mod evoc;
 mod hdbscan;
@@ -95,7 +97,9 @@ mod traits;
 mod util;
 
 pub use constrained::{ConstrainedClustering, Constraint, CopKmeans};
+pub use correlation::{CorrelationClustering, CorrelationResult, SignedEdge};
 pub use dbscan::{Dbscan, DbscanExt, NOISE};
+pub use denstream::DenStream;
 pub use distance::{
     CompositeDistance, CosineDistance, DistanceMetric, Euclidean, InnerProductDistance,
     SquaredEuclidean,
