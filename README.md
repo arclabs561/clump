@@ -160,6 +160,14 @@ assert_eq!(labels.len(), data.len());
 assert!(!evoc.cluster_layers().is_empty());
 ```
 
+## Examples
+
+[**clustering.rs**](examples/clustering.rs) -- K-means, DBSCAN, and HDBSCAN on the same dataset. Generates three well-separated 2D clusters and runs all three algorithms to compare their behavior: k-means needs the cluster count up front, DBSCAN discovers it from density, and HDBSCAN adapts without an epsilon parameter. A good starting point for choosing between algorithms.
+
+```bash
+cargo run --example clustering
+```
+
 ## Notes
 
 - `Dbscan::fit_predict` returns a label for every point; noise points are assigned to a special
