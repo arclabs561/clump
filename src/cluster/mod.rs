@@ -84,19 +84,24 @@
 //! assert_eq!(labels.len(), data.len());
 //! ```
 
+pub mod constrained;
 mod dbscan;
 pub mod distance;
 mod evoc;
 mod hdbscan;
 mod kmeans;
+pub mod streaming;
 mod traits;
 mod util;
 
+pub use constrained::{ConstrainedClustering, Constraint, CopKmeans};
 pub use dbscan::{Dbscan, DbscanExt, NOISE};
 pub use distance::{
-    CosineDistance, DistanceMetric, Euclidean, InnerProductDistance, SquaredEuclidean,
+    CompositeDistance, CosineDistance, DistanceMetric, Euclidean, InnerProductDistance,
+    SquaredEuclidean,
 };
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
 pub use hdbscan::Hdbscan;
 pub use kmeans::{Kmeans, KmeansFit};
+pub use streaming::{MiniBatchKmeans, StreamingClustering};
 pub use traits::Clustering;

@@ -34,6 +34,10 @@ pub enum Error {
         found: usize,
     },
 
+    /// A pairwise constraint could not be satisfied.
+    #[error("constraint violation: {0}")]
+    ConstraintViolation(String),
+
     /// Other error.
     #[error("{0}")]
     Other(String),
