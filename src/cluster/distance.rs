@@ -1,7 +1,8 @@
 //! Distance metrics for clustering algorithms.
 //!
 //! All clustering algorithms in this crate are generic over `DistanceMetric`.
-//! The default is `SquaredEuclidean`, which preserves backward compatibility.
+//! The default metric varies by algorithm: `Kmeans` and `EVoC` default to
+//! `SquaredEuclidean`; `Dbscan` and `Hdbscan` default to `Euclidean`.
 
 /// A distance function between two equal-length `f32` slices.
 ///

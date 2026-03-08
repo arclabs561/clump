@@ -43,6 +43,140 @@ impl UnionFind {
     }
 }
 
+use super::distance::DistanceMetric;
+use crate::error::{Error, Result};
+use rand::prelude::*;
+
+/// Validate that all values in the dataset are finite (no NaN or infinity).
+///
+/// Every `fit_predict` entry point should call this before doing any computation.
+/// A single non-finite value poisons all distance calculations silently.
+pub(crate) fn validate_finite(data: &[Vec<f32>]) -> Result<()> {
+    for point in data {
+        for &val in point {
+            if !val.is_finite() {
+                return Err(Error::InvalidParameter {
+                    name: "data",
+                    message: "contains NaN or infinity",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compute mean per-dimension variance of the dataset.
+///
+/// Used to normalize convergence tolerance so it scales with data magnitude.
+pub(crate) fn mean_variance(data: &[Vec<f32>]) -> f64 {
+    let n = data.len() as f64;
+    if n < 1.0 {
+        return 1.0;
+    }
+    let d = data[0].len();
+    if d == 0 {
+        return 1.0;
+    }
+    let mut total_var = 0.0f64;
+    for j in 0..d {
+        let mean = data.iter().map(|p| p[j] as f64).sum::<f64>() / n;
+        let var = data
+            .iter()
+            .map(|p| {
+                let diff = p[j] as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / n;
+        total_var += var;
+    }
+    let mv = total_var / d as f64;
+    if mv < f64::EPSILON {
+        1.0
+    } else {
+        mv
+    }
+}
+
+/// Initialize centroids using k-means++ (Arthur & Vassilvitskii, 2007).
+///
+/// `data` is `&[Vec<f32>]`, `k` is the number of centroids to select.
+/// `alpha` controls the distance weighting exponent: standard k-means++ uses 2.0
+/// (D^2 weighting). Negative distances are clamped to 0 to handle non-metric
+/// distances safely.
+pub(crate) fn kmeanspp_init<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    k: usize,
+    metric: &D,
+    alpha: f32,
+    rng: &mut StdRng,
+) -> Vec<Vec<f32>> {
+    let n = data.len();
+    let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(k);
+
+    // First centroid: random point.
+    let first = rng.random_range(0..n);
+    centroids.push(data[first].clone());
+
+    // Remaining centroids: k-means++ selection.
+    for _ in 1..k {
+        let mut distances: Vec<f32> = Vec::with_capacity(n);
+        for point in data {
+            let min_dist = centroids
+                .iter()
+                .map(|c| metric.distance(point, c))
+                .fold(f32::MAX, f32::min);
+            // Clamp negative distances (e.g. InnerProductDistance) to 0.
+            distances.push(min_dist.max(0.0));
+        }
+
+        // Weight = distance^(alpha/2). For SquaredEuclidean with alpha=2,
+        // this gives D(x)^1 = D(x), matching standard behavior since
+        // SquaredEuclidean distances are already squared.
+        let weights: Vec<f32> = distances.iter().map(|&d| d.powf(alpha / 2.0)).collect();
+        let total: f32 = weights.iter().sum();
+
+        if total == 0.0 || !total.is_finite() {
+            let idx = rng.random_range(0..n);
+            centroids.push(data[idx].clone());
+            continue;
+        }
+
+        let threshold = rng.random::<f32>() * total;
+        let mut cumsum = 0.0;
+        let mut selected = 0;
+        for (j, &w) in weights.iter().enumerate() {
+            cumsum += w;
+            if cumsum >= threshold {
+                selected = j;
+                break;
+            }
+        }
+
+        centroids.push(data[selected].clone());
+    }
+
+    centroids
+}
+
+/// Assign a point to the nearest centroid. Returns the cluster index.
+pub(crate) fn assign_nearest<D: DistanceMetric>(
+    point: &[f32],
+    centroids: &[Vec<f32>],
+    metric: &D,
+) -> usize {
+    let mut best_cluster = 0;
+    let mut best_dist = f32::MAX;
+    for (k, centroid) in centroids.iter().enumerate() {
+        let dist = metric.distance(point, centroid);
+        if dist < best_dist {
+            best_dist = dist;
+            best_cluster = k;
+        }
+    }
+    best_cluster
+}
+
 /// Compute an MST for a dense complete graph using Prim's algorithm.
 ///
 /// `dist_fn(i, j)` returns the edge weight between points `i` and `j`.

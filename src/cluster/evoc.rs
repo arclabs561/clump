@@ -22,7 +22,7 @@
 #![allow(clippy::too_many_lines)]
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
-use super::util::UnionFind;
+use super::util::{self, UnionFind};
 use crate::error::{Error, Result};
 use rand::prelude::*;
 use std::collections::HashMap;
@@ -274,6 +274,8 @@ impl<D: DistanceMetric> EVoC<D> {
         }
         self.original_dim = Some(d);
 
+        util::validate_finite(data)?;
+
         if self.params.intermediate_dim == 0 {
             return Err(Error::InvalidParameter {
                 name: "intermediate_dim",
@@ -297,12 +299,17 @@ impl<D: DistanceMetric> EVoC<D> {
         let reduced = project(&flat, n, d, self.params.intermediate_dim, self.params.seed);
 
         // Step 2: build MST (Prim on a dense graph), then sort edges by distance.
-        let mut mst = prim_mst(
-            &reduced,
-            n,
-            self.params.intermediate_dim,
-            &self.params.metric,
-        );
+        let dim = self.params.intermediate_dim;
+        let metric = &self.params.metric;
+        let mut mst = util::prim_mst(n, |i, j| {
+            let ivec = &reduced[i * dim..(i + 1) * dim];
+            let jvec = &reduced[j * dim..(j + 1) * dim];
+            metric.distance(ivec, jvec)
+        });
+        // Store sqrt of metric distances for the hierarchy (Euclidean scale).
+        for edge in &mut mst {
+            edge.2 = edge.2.sqrt();
+        }
         mst.sort_by(|a, b| a.2.total_cmp(&b.2));
         self.mst_edges = mst;
 
@@ -435,9 +442,9 @@ fn project(
     intermediate_dim: usize,
     seed: Option<u64>,
 ) -> Vec<f32> {
-    let mut rng: Box<dyn RngCore> = match seed {
-        Some(s) => Box::new(StdRng::seed_from_u64(s)),
-        None => Box::new(rand::rng()),
+    let mut rng = match seed {
+        Some(s) => StdRng::seed_from_u64(s),
+        None => StdRng::from_os_rng(),
     };
 
     // Random projection matrix: intermediate_dim x original_dim.
@@ -475,70 +482,6 @@ fn normalize_in_place(v: &mut [f32]) {
 fn dot(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
-/// Compute an MST for a dense complete graph using Prim's algorithm.
-///
-/// Returns edges `(u, v, dist)` where `dist` is measured by the given metric
-/// in the reduced space. The edge weight stored is the square root of the metric
-/// distance when the metric is squared Euclidean (to produce proper Euclidean
-/// distances for the hierarchy). For other metrics the raw distance is used.
-fn prim_mst(
-    reduced: &[f32],
-    n: usize,
-    dim: usize,
-    metric: &impl DistanceMetric,
-) -> Vec<(usize, usize, f32)> {
-    if n <= 1 {
-        return Vec::new();
-    }
-
-    let mut in_tree = vec![false; n];
-    let mut best = vec![f32::INFINITY; n]; // metric distances
-    let mut parent = vec![usize::MAX; n];
-
-    best[0] = 0.0;
-
-    for _ in 0..n {
-        // Pick the next vertex with the smallest key.
-        let mut u = usize::MAX;
-        let mut best_val = f32::INFINITY;
-        for i in 0..n {
-            if !in_tree[i] && best[i] < best_val {
-                best_val = best[i];
-                u = i;
-            }
-        }
-
-        if u == usize::MAX {
-            break;
-        }
-        in_tree[u] = true;
-
-        let uvec = &reduced[u * dim..(u + 1) * dim];
-        for v in 0..n {
-            if in_tree[v] {
-                continue;
-            }
-            let vvec = &reduced[v * dim..(v + 1) * dim];
-            let d = metric.distance(uvec, vvec);
-            if d < best[v] {
-                best[v] = d;
-                parent[v] = u;
-            }
-        }
-    }
-
-    let mut edges: Vec<(usize, usize, f32)> = Vec::with_capacity(n - 1);
-    for v in 1..n {
-        let u = parent[v];
-        if u != usize::MAX {
-            // For squared euclidean, take sqrt to get euclidean distances for hierarchy.
-            // For other metrics, use raw distance.
-            edges.push((u, v, best[v].sqrt()));
-        }
-    }
-    edges
 }
 
 fn extract_layers(
@@ -898,5 +841,29 @@ mod tests {
         assert_eq!(b0, b1);
         assert_eq!(b1, b2);
         assert_ne!(a0, b0);
+    }
+
+    #[test]
+    fn nan_input_rejected() {
+        let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let mut evoc = EVoC::new(EVoCParams {
+            intermediate_dim: 1,
+            min_cluster_size: 1,
+            ..Default::default()
+        });
+        let result = evoc.fit_predict(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inf_input_rejected() {
+        let data = vec![vec![0.0, 0.0], vec![f32::INFINITY, 1.0], vec![2.0, 2.0]];
+        let mut evoc = EVoC::new(EVoCParams {
+            intermediate_dim: 1,
+            min_cluster_size: 1,
+            ..Default::default()
+        });
+        let result = evoc.fit_predict(&data);
+        assert!(result.is_err());
     }
 }

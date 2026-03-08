@@ -56,10 +56,10 @@
 //! - **HDBSCAN***: A hierarchical extension that removes the epsilon parameter
 //!   by building a stability-based cluster hierarchy. This is the modern
 //!   default for density clustering (Campello et al., 2013).
-//!   (Planned for future versions of `clump`).
+//!   See [`Hdbscan`](super::Hdbscan).
 
 use super::distance::{DistanceMetric, Euclidean};
-use super::traits::Clustering;
+use super::util;
 use crate::error::{Error, Result};
 
 /// DBSCAN clustering algorithm, generic over a distance metric.
@@ -68,7 +68,7 @@ use crate::error::{Error, Result};
 /// where epsilon is compared against Euclidean distance.
 ///
 /// ```
-/// use clump::{Dbscan, Clustering, NOISE};
+/// use clump::{Dbscan, NOISE};
 ///
 /// let data = vec![
 ///     vec![0.0f32, 0.0], vec![0.1, 0.0], vec![0.0, 0.1], // cluster
@@ -142,10 +142,12 @@ impl<D: DistanceMetric> Dbscan<D> {
     }
 
     /// Fit and predict, returning labels where noise is marked as `None`.
-    ///
-    /// This is a convenience wrapper so callers don't need to import `DbscanExt`.
     pub fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
-        <Self as DbscanExt>::fit_predict_with_noise(self, data)
+        let labels = self.fit_predict(data)?;
+        Ok(labels
+            .into_iter()
+            .map(|l| if l == NOISE { None } else { Some(l) })
+            .collect())
     }
 
     /// Check whether a label is the DBSCAN noise sentinel.
@@ -215,8 +217,11 @@ impl Default for Dbscan<Euclidean> {
     }
 }
 
-impl<D: DistanceMetric> Clustering for Dbscan<D> {
-    fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+impl<D: DistanceMetric> Dbscan<D> {
+    /// Fit and return one cluster label per input point.
+    ///
+    /// Noise points are labeled with the sentinel `NOISE` (`usize::MAX`).
+    pub fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         let n = data.len();
         if n == 0 {
             return Err(Error::EmptyInput);
@@ -235,6 +240,25 @@ impl<D: DistanceMetric> Clustering for Dbscan<D> {
                 message: "must be at least 1",
             });
         }
+
+        // Validate dimensionality.
+        let d = data[0].len();
+        if d == 0 {
+            return Err(Error::InvalidParameter {
+                name: "dimension",
+                message: "must be at least 1",
+            });
+        }
+        for point in data.iter().skip(1) {
+            if point.len() != d {
+                return Err(Error::DimensionMismatch {
+                    expected: d,
+                    found: point.len(),
+                });
+            }
+        }
+
+        util::validate_finite(data)?;
 
         // Initialize: all points unclassified.
         let mut labels = vec![UNCLASSIFIED; n];
@@ -269,9 +293,6 @@ impl<D: DistanceMetric> Clustering for Dbscan<D> {
         }
 
         // Convert internal labels to the public `usize` representation.
-        //
-        // Noise points are labeled with the sentinel `NOISE` (usize::MAX), matching
-        // `DbscanExt::is_noise` and the crate-level `clump::NOISE` constant.
         let mut out: Vec<usize> = Vec::with_capacity(n);
         for l in labels {
             if l >= 0 {
@@ -282,76 +303,6 @@ impl<D: DistanceMetric> Clustering for Dbscan<D> {
         }
 
         Ok(out)
-    }
-
-    /// DBSCAN discovers clusters dynamically, so this returns 0.
-    ///
-    /// To get the actual number of clusters, examine the labels after `fit_predict`.
-    fn n_clusters(&self) -> usize {
-        0 // Unknown until fit
-    }
-}
-
-/// Extended DBSCAN interface with noise detection.
-pub trait DbscanExt {
-    /// Fit and predict, returning labels where noise is marked as `None`.
-    fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>>;
-
-    /// Check if a label represents noise.
-    fn is_noise(label: usize) -> bool {
-        label == NOISE
-    }
-}
-
-impl<D: DistanceMetric> DbscanExt for Dbscan<D> {
-    fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
-        let n = data.len();
-        if n == 0 {
-            return Err(Error::EmptyInput);
-        }
-
-        if self.epsilon <= 0.0 {
-            return Err(Error::InvalidParameter {
-                name: "epsilon",
-                message: "must be positive",
-            });
-        }
-
-        // Initialize: all points unclassified.
-        let mut labels = vec![UNCLASSIFIED; n];
-        let mut visited = vec![false; n];
-        let mut cluster_id: i32 = 0;
-
-        for point_idx in 0..n {
-            if visited[point_idx] {
-                continue;
-            }
-            visited[point_idx] = true;
-
-            let neighbors = self.region_query(data, point_idx);
-
-            // MinPts includes the point itself
-            if neighbors.len() + 1 < self.min_pts {
-                labels[point_idx] = NOISE_LABEL;
-                continue;
-            }
-
-            self.expand_cluster(
-                data,
-                point_idx,
-                &neighbors,
-                &mut labels,
-                cluster_id,
-                &mut visited,
-            );
-            cluster_id += 1;
-        }
-
-        // Return with noise as None
-        Ok(labels
-            .into_iter()
-            .map(|l| if l >= 0 { Some(l as usize) } else { None })
-            .collect())
     }
 }
 
@@ -535,6 +486,35 @@ mod tests {
         for label in labels {
             assert_eq!(label, cluster);
         }
+    }
+
+    #[test]
+    fn nan_input_rejected() {
+        let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let result = Dbscan::new(0.5, 2).fit_predict(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inf_input_rejected() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, f32::INFINITY], vec![2.0, 2.0]];
+        let result = Dbscan::new(0.5, 2).fit_predict(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scalar_data_d1() {
+        let data = vec![
+            vec![0.0],
+            vec![0.1],
+            vec![0.2],
+            vec![10.0],
+            vec![10.1],
+            vec![10.2],
+        ];
+        let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+        assert_eq!(labels[0], labels[1]);
+        assert_ne!(labels[0], labels[3]);
     }
 
     #[test]

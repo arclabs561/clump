@@ -215,9 +215,9 @@ impl CorrelationClustering {
     ///
     /// Returns a label vector (labels may not be contiguous).
     fn pivot(&self, n_items: usize, adj: &[Vec<(usize, f32)>]) -> Vec<usize> {
-        let mut rng: Box<dyn RngCore> = match self.seed {
-            Some(s) => Box::new(StdRng::seed_from_u64(s)),
-            None => Box::new(rand::rng()),
+        let mut rng = match self.seed {
+            Some(s) => StdRng::seed_from_u64(s),
+            None => StdRng::from_os_rng(),
         };
 
         let mut assigned = vec![false; n_items];
@@ -225,7 +225,7 @@ impl CorrelationClustering {
 
         // Shuffle to randomize pivot order.
         let mut order: Vec<usize> = (0..n_items).collect();
-        order.shuffle(&mut *rng);
+        order.shuffle(&mut rng);
 
         let mut next_cluster = 0usize;
 

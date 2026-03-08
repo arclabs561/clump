@@ -13,49 +13,24 @@
 //!
 //! Soft clustering (e.g., GMM) is not implemented in this crate yet.
 //!
-//! ## Algorithms (implemented)
+//! ## Algorithms
 //!
-//! ### K-means
+//! **Batch**
+//! - [`Kmeans`]: Lloyd's algorithm with k-means++ seeding, generic over distance metrics.
+//! - [`Dbscan`]: density-based clustering with noise detection (Ester et al. 1996).
+//! - [`Hdbscan`]: hierarchical density clustering without a global epsilon (Campello et al. 2013).
+//! - [`EVoC`]: multi-granularity hierarchy via MST on random projections.
+//! - [`CopKmeans`]: constrained k-means with must-link / cannot-link (Wagstaff et al. 2001).
+//! - [`CorrelationClustering`]: PIVOT + local search on signed graphs (Bansal et al. 2004).
 //!
-//! The classic algorithm: assign each point to the nearest centroid, then
-//! update centroids to the mean of their points. Repeat.
-//!
-//! **Objective**: Minimize within-cluster sum of squares:
-//!
-//! ```text
-//! J = Σ_k Σ_{x ∈ C_k} ||x - μ_k||²
-//! ```
-//!
-//! **Assumptions**:
-//! - Clusters are roughly spherical
-//! - Clusters have similar sizes
-//! - You know k in advance
-//!
-//! **When to use**: Fast initial exploration, or when you need hard assignments
-//! and can accept the spherical assumption.
-//!
-//! ### DBSCAN
-//!
-//! Density-based clustering that can discover non-convex clusters and identify
-//! outliers (noise points). DBSCAN does not require specifying the number of
-//! clusters in advance.
-//!
-//! ### HDBSCAN
-//!
-//! Hierarchical extension of DBSCAN that removes the global epsilon parameter.
-//! Builds a density-based hierarchy and extracts the most stable clusters
-//! automatically. Handles varying-density clusters that DBSCAN struggles with.
-//!
-//! ### EVōC
-//!
-//! EVōC (Embedding Vector Oriented Clustering) is a hierarchical clustering approach aimed at
-//! embedding vectors. In addition to a single label vector, it can expose multiple cluster layers
-//! (different granularities), a cluster tree, and near-duplicate groups.
+//! **Streaming**
+//! - [`MiniBatchKmeans`]: online k-means with decaying learning rate (Sculley 2010).
+//! - [`DenStream`]: streaming density-based clustering with decay (Cao et al. 2006).
 //!
 //! ## Usage
 //!
 //! ```rust
-//! use clump::cluster::{Clustering, Dbscan, EVoC, EVoCParams, Kmeans};
+//! use clump::cluster::{Dbscan, EVoC, EVoCParams, Kmeans};
 //!
 //! let data = vec![
 //!     vec![0.0, 0.0],
@@ -93,12 +68,11 @@ mod evoc;
 mod hdbscan;
 mod kmeans;
 pub mod streaming;
-mod traits;
 mod util;
 
-pub use constrained::{ConstrainedClustering, Constraint, CopKmeans};
+pub use constrained::{Constraint, CopKmeans};
 pub use correlation::{CorrelationClustering, CorrelationResult, SignedEdge};
-pub use dbscan::{Dbscan, DbscanExt, NOISE};
+pub use dbscan::{Dbscan, NOISE};
 pub use denstream::DenStream;
 pub use distance::{
     CompositeDistance, CosineDistance, DistanceMetric, Euclidean, InnerProductDistance,
@@ -107,5 +81,4 @@ pub use distance::{
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
 pub use hdbscan::Hdbscan;
 pub use kmeans::{Kmeans, KmeansFit};
-pub use streaming::{MiniBatchKmeans, StreamingClustering};
-pub use traits::Clustering;
+pub use streaming::MiniBatchKmeans;

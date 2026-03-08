@@ -41,7 +41,6 @@
 //! Based on Hierarchical Density Estimates." PAKDD 2013.
 
 use super::distance::{DistanceMetric, Euclidean};
-use super::traits::Clustering;
 use super::util::{self, UnionFind};
 use crate::error::{Error, Result};
 
@@ -52,7 +51,7 @@ use super::dbscan::NOISE;
 /// The default metric is [`Euclidean`] (L2), matching the original behavior.
 ///
 /// ```
-/// use clump::{Hdbscan, Clustering, NOISE};
+/// use clump::{Hdbscan, NOISE};
 ///
 /// // Two tight clusters, well-separated
 /// let mut data: Vec<Vec<f32>> = (0..15).map(|i| {
@@ -132,8 +131,11 @@ impl Default for Hdbscan<Euclidean> {
     }
 }
 
-impl<D: DistanceMetric> Clustering for Hdbscan<D> {
-    fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+impl<D: DistanceMetric> Hdbscan<D> {
+    /// Fit and return one cluster label per input point.
+    ///
+    /// Noise points are labeled with `NOISE` (`usize::MAX`).
+    pub fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         let n = data.len();
         if n == 0 {
             return Err(Error::EmptyInput);
@@ -169,6 +171,8 @@ impl<D: DistanceMetric> Clustering for Hdbscan<D> {
             }
         }
 
+        util::validate_finite(data)?;
+
         let dists = pairwise_distances(data, &self.metric);
         let core_dists = core_distances(&dists, n, self.min_samples);
 
@@ -179,9 +183,25 @@ impl<D: DistanceMetric> Clustering for Hdbscan<D> {
 
         Ok(extract_clusters(&mst, n, self.min_cluster_size))
     }
+}
 
-    fn n_clusters(&self) -> usize {
-        0
+/// NaN/Inf input validation tests (hdbscan-specific).
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn nan_input_rejected() {
+        let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let result = Hdbscan::new().fit_predict(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inf_input_rejected() {
+        let data = vec![vec![0.0, 0.0], vec![f32::INFINITY, 1.0], vec![2.0, 2.0]];
+        let result = Hdbscan::new().fit_predict(&data);
+        assert!(result.is_err());
     }
 }
 

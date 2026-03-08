@@ -23,7 +23,7 @@ Clustering algorithms for dense `f32` vectors in Rust. No unsafe code.
 
 ```toml
 [dependencies]
-clump = "0.3.0"
+clump = "0.4.0"
 ```
 
 ```rust

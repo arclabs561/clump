@@ -1,10 +1,12 @@
 //! Dense clustering primitives.
 //!
-//! `clump` is a small, backend-agnostic library of clustering algorithms for dense vectors.
+//! `clump` provides clustering algorithms for dense `f32` vectors, generic over
+//! a pluggable distance metric.
 //!
-//! The primary public API is under [`cluster`], which provides:
-//! - k-means (k-means++ seeding, Lloyd iterations)
-//! - DBSCAN (density clustering, with optional noise labeling)
+//! **Batch**: [`Kmeans`], [`Dbscan`], [`Hdbscan`], [`EVoC`], [`CopKmeans`],
+//! [`CorrelationClustering`].
+//!
+//! **Streaming**: [`MiniBatchKmeans`], [`DenStream`].
 
 #![forbid(unsafe_code)]
 
@@ -12,10 +14,9 @@ pub mod cluster;
 pub mod error;
 
 pub use cluster::{
-    ClusterHierarchy, ClusterLayer, ClusterNode, Clustering, CompositeDistance,
-    ConstrainedClustering, Constraint, CopKmeans, CorrelationClustering, CorrelationResult,
-    CosineDistance, Dbscan, DbscanExt, DenStream, DistanceMetric, EVoC, EVoCParams, Euclidean,
-    Hdbscan, InnerProductDistance, Kmeans, KmeansFit, MiniBatchKmeans, SignedEdge,
-    SquaredEuclidean, StreamingClustering, NOISE,
+    ClusterHierarchy, ClusterLayer, ClusterNode, CompositeDistance, Constraint, CopKmeans,
+    CorrelationClustering, CorrelationResult, CosineDistance, Dbscan, DenStream, DistanceMetric,
+    EVoC, EVoCParams, Euclidean, Hdbscan, InnerProductDistance, Kmeans, KmeansFit, MiniBatchKmeans,
+    SignedEdge, SquaredEuclidean, NOISE,
 };
 pub use error::{Error, Result};

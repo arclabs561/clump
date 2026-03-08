@@ -1,6 +1,6 @@
 //! K-means, DBSCAN, and HDBSCAN on a simple 2D dataset.
 
-use clump::{Clustering, Dbscan, Hdbscan, Kmeans, NOISE};
+use clump::{Dbscan, Hdbscan, Kmeans, NOISE};
 
 fn main() {
     // Three well-separated clusters in 2D.

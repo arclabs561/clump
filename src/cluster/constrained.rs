@@ -38,6 +38,7 @@
 //! Background Knowledge." ICML 2001.
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::util;
 use crate::error::{Error, Result};
 use rand::prelude::*;
 
@@ -50,23 +51,13 @@ pub enum Constraint {
     CannotLink(usize, usize),
 }
 
-/// Trait for constrained clustering algorithms.
-pub trait ConstrainedClustering {
-    /// Fit the model with pairwise constraints.
-    fn fit_predict_constrained(
-        &self,
-        data: &[Vec<f32>],
-        constraints: &[Constraint],
-    ) -> Result<Vec<usize>>;
-}
-
 /// COP-Kmeans: constrained k-means clustering (Wagstaff et al., 2001).
 ///
 /// Standard k-means with pairwise must-link and cannot-link constraints
 /// enforced during the assignment step.
 ///
 /// ```
-/// use clump::cluster::constrained::{CopKmeans, Constraint, ConstrainedClustering};
+/// use clump::cluster::constrained::{CopKmeans, Constraint};
 ///
 /// let data = vec![
 ///     vec![0.0f32, 0.0],
@@ -210,52 +201,64 @@ impl<D: DistanceMetric> CopKmeans<D> {
         groups
     }
 
-    /// Initialize centroids using k-means++ seeding.
-    fn init_centroids(&self, data: &[Vec<f32>], rng: &mut (impl Rng + ?Sized)) -> Vec<Vec<f32>> {
+    /// Assign all points under must-link / cannot-link constraints.
+    ///
+    /// Processes points in `order`, assigning each to the nearest valid cluster.
+    /// Returns `labels[i] = Some(cluster_id)` for every point, or an error if
+    /// no feasible assignment exists.
+    fn constrained_assign(
+        &self,
+        data: &[Vec<f32>],
+        centroids: &[Vec<f32>],
+        must_links: &[Vec<usize>],
+        cannot_links: &[Vec<usize>],
+        order: &[usize],
+    ) -> Result<Vec<Option<usize>>> {
         let n = data.len();
-        let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(self.k);
+        let mut labels: Vec<Option<usize>> = vec![None; n];
 
-        // First centroid: random point.
-        let first = rng.random_range(0..n);
-        centroids.push(data[first].clone());
-
-        for _ in 1..self.k {
-            let mut distances: Vec<f32> = Vec::with_capacity(n);
-            for point in data {
-                let min_dist = centroids
-                    .iter()
-                    .map(|c| self.metric.distance(point, c))
-                    .fold(f32::MAX, f32::min);
-                distances.push(min_dist);
-            }
-
-            let total: f32 = distances.iter().sum();
-            if total == 0.0 {
-                let idx = rng.random_range(0..n);
-                centroids.push(data[idx].clone());
+        for &i in order {
+            // If a must-link partner is already assigned, force that cluster.
+            if let Some(forced) = Self::must_link_cluster(i, &labels, must_links) {
+                if Self::violates_cannot_link(i, forced, &labels, cannot_links) {
+                    return Err(Error::ConstraintViolation(format!(
+                        "point {i}: must-link forces cluster {forced} but cannot-link forbids it"
+                    )));
+                }
+                labels[i] = Some(forced);
                 continue;
             }
 
-            let threshold = rng.random::<f32>() * total;
-            let mut cumsum = 0.0;
-            let mut selected = 0;
-            for (j, &d) in distances.iter().enumerate() {
-                cumsum += d;
-                if cumsum >= threshold {
-                    selected = j;
+            // Sort candidate clusters by distance (nearest first).
+            let mut candidates: Vec<(usize, f32)> = (0..self.k)
+                .map(|k| (k, self.metric.distance(&data[i], &centroids[k])))
+                .collect();
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Pick nearest valid cluster.
+            let mut assigned = false;
+            for (k, _) in &candidates {
+                if !Self::violates_cannot_link(i, *k, &labels, cannot_links) {
+                    labels[i] = Some(*k);
+                    assigned = true;
                     break;
                 }
             }
 
-            centroids.push(data[selected].clone());
+            if !assigned {
+                return Err(Error::ConstraintViolation(format!(
+                    "point {i}: no valid cluster assignment exists"
+                )));
+            }
         }
 
-        centroids
+        Ok(labels)
     }
 }
 
-impl<D: DistanceMetric> ConstrainedClustering for CopKmeans<D> {
-    fn fit_predict_constrained(
+impl<D: DistanceMetric> CopKmeans<D> {
+    /// Fit the model with pairwise constraints.
+    pub fn fit_predict_constrained(
         &self,
         data: &[Vec<f32>],
         constraints: &[Constraint],
@@ -297,6 +300,8 @@ impl<D: DistanceMetric> ConstrainedClustering for CopKmeans<D> {
                 });
             }
         }
+
+        util::validate_finite(data)?;
 
         // Validate constraint indices.
         for c in constraints {
@@ -358,57 +363,20 @@ impl<D: DistanceMetric> ConstrainedClustering for CopKmeans<D> {
         }
 
         // Initialize RNG.
-        let mut rng: Box<dyn RngCore> = match self.seed {
-            Some(s) => Box::new(StdRng::seed_from_u64(s)),
-            None => Box::new(rand::rng()),
+        let mut rng = match self.seed {
+            Some(s) => StdRng::seed_from_u64(s),
+            None => StdRng::from_os_rng(),
         };
 
         // Initialize centroids via k-means++.
-        let mut centroids = self.init_centroids(data, &mut *rng);
+        let mut centroids = util::kmeanspp_init(data, self.k, &self.metric, 2.0, &mut rng);
 
         for _ in 0..self.max_iter {
             // Assignment step (constrained).
-            let mut labels: Vec<Option<usize>> = vec![None; n];
-
-            // Process points in random order to reduce ordering bias.
             let mut order: Vec<usize> = (0..n).collect();
-            order.shuffle(&mut *rng);
-
-            for &i in &order {
-                // Sort candidate clusters by distance (nearest first).
-                let mut candidates: Vec<(usize, f32)> = (0..self.k)
-                    .map(|k| (k, self.metric.distance(&data[i], &centroids[k])))
-                    .collect();
-                candidates
-                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                // If a must-link partner is already assigned, force that cluster.
-                if let Some(forced) = Self::must_link_cluster(i, &labels, &must_links) {
-                    if Self::violates_cannot_link(i, forced, &labels, &cannot_links) {
-                        return Err(Error::ConstraintViolation(format!(
-                            "point {i}: must-link forces cluster {forced} but cannot-link forbids it"
-                        )));
-                    }
-                    labels[i] = Some(forced);
-                    continue;
-                }
-
-                // Otherwise pick nearest valid cluster.
-                let mut assigned = false;
-                for (k, _) in &candidates {
-                    if !Self::violates_cannot_link(i, *k, &labels, &cannot_links) {
-                        labels[i] = Some(*k);
-                        assigned = true;
-                        break;
-                    }
-                }
-
-                if !assigned {
-                    return Err(Error::ConstraintViolation(format!(
-                        "point {i}: no valid cluster assignment exists"
-                    )));
-                }
-            }
+            order.shuffle(&mut rng);
+            let labels =
+                self.constrained_assign(data, &centroids, &must_links, &cannot_links, &order)?;
 
             // Update step: recompute centroids.
             let mut new_centroids = vec![vec![0.0f32; d]; self.k];
@@ -444,47 +412,17 @@ impl<D: DistanceMetric> ConstrainedClustering for CopKmeans<D> {
 
             centroids = new_centroids;
 
-            if shift < self.tol as f32 {
+            let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
+            if shift < effective_tol {
                 break;
             }
         }
 
         // Final assignment with constraints.
-        let mut labels: Vec<Option<usize>> = vec![None; n];
         let mut order: Vec<usize> = (0..n).collect();
-        order.shuffle(&mut *rng);
-
-        for &i in &order {
-            if let Some(forced) = Self::must_link_cluster(i, &labels, &must_links) {
-                if Self::violates_cannot_link(i, forced, &labels, &cannot_links) {
-                    return Err(Error::ConstraintViolation(format!(
-                        "point {i}: must-link forces cluster {forced} but cannot-link forbids it"
-                    )));
-                }
-                labels[i] = Some(forced);
-                continue;
-            }
-
-            let mut candidates: Vec<(usize, f32)> = (0..self.k)
-                .map(|k| (k, self.metric.distance(&data[i], &centroids[k])))
-                .collect();
-            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            let mut assigned = false;
-            for (k, _) in &candidates {
-                if !Self::violates_cannot_link(i, *k, &labels, &cannot_links) {
-                    labels[i] = Some(*k);
-                    assigned = true;
-                    break;
-                }
-            }
-
-            if !assigned {
-                return Err(Error::ConstraintViolation(format!(
-                    "point {i}: no valid cluster assignment exists"
-                )));
-            }
-        }
+        order.shuffle(&mut rng);
+        let labels =
+            self.constrained_assign(data, &centroids, &must_links, &cannot_links, &order)?;
 
         Ok(labels.into_iter().map(|l| l.unwrap()).collect())
     }
@@ -775,6 +713,24 @@ mod tests {
             labels1, labels2,
             "same seed should produce identical results"
         );
+    }
+
+    #[test]
+    fn nan_input_rejected() {
+        let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0]];
+        let result = CopKmeans::new(2)
+            .with_seed(42)
+            .fit_predict_constrained(&data, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inf_input_rejected() {
+        let data = vec![vec![0.0, 0.0], vec![f32::INFINITY, 1.0]];
+        let result = CopKmeans::new(2)
+            .with_seed(42)
+            .fit_predict_constrained(&data, &[]);
+        assert!(result.is_err());
     }
 }
 

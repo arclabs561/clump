@@ -1,4 +1,4 @@
-use clump::cluster::{Clustering, Kmeans};
+use clump::cluster::Kmeans;
 use proptest::prelude::*;
 
 proptest! {

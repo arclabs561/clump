@@ -1,4 +1,4 @@
-use clump::cluster::{Clustering, Kmeans};
+use clump::cluster::Kmeans;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::prelude::*;
 use std::hint::black_box;

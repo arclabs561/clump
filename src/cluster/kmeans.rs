@@ -54,9 +54,8 @@
 //! This crate implements standard Lloyd's algorithm with **k-means++** ($\alpha=2$).
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
-use super::traits::Clustering;
+use super::util;
 use crate::error::{Error, Result};
-use ndarray::Array2;
 use rand::prelude::*;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -67,7 +66,7 @@ use rayon::prelude::*;
 /// compatibility with previous versions.
 ///
 /// ```
-/// use clump::{Kmeans, Clustering};
+/// use clump::Kmeans;
 ///
 /// let data = vec![
 ///     vec![0.0f32, 0.0],
@@ -133,19 +132,6 @@ impl<D: DistanceMetric> KmeansFit<D> {
         }
 
         let d = self.centroids[0].len();
-        if d == 0 {
-            return Err(Error::InvalidParameter {
-                name: "dimension",
-                message: "must be at least 1",
-            });
-        }
-
-        for c in &self.centroids {
-            if c.len() != d {
-                return Err(Error::Other("centroid dimension mismatch".to_string()));
-            }
-        }
-
         let mut out = Vec::with_capacity(data.len());
         for point in data {
             if point.len() != d {
@@ -154,17 +140,7 @@ impl<D: DistanceMetric> KmeansFit<D> {
                     found: point.len(),
                 });
             }
-
-            let mut best_cluster = 0usize;
-            let mut best_dist = f32::MAX;
-            for (k, centroid) in self.centroids.iter().enumerate() {
-                let dist = self.metric.distance(point, centroid);
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_cluster = k;
-                }
-            }
-            out.push(best_cluster);
+            out.push(util::assign_nearest(point, &self.centroids, &self.metric));
         }
 
         Ok(out)
@@ -265,8 +241,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             });
         }
 
-        // Convert to ndarray
-        let mut flat: Vec<f32> = Vec::with_capacity(n * d);
+        // Validate uniform dimensionality.
         for point in data {
             if point.len() != d {
                 return Err(Error::DimensionMismatch {
@@ -274,189 +249,120 @@ impl<D: DistanceMetric> Kmeans<D> {
                     found: point.len(),
                 });
             }
-            flat.extend(point);
         }
-        let data_arr =
-            Array2::from_shape_vec((n, d), flat).map_err(|e| Error::Other(e.to_string()))?;
 
-        // Initialize RNG
-        let mut rng: Box<dyn RngCore> = match self.seed {
-            Some(s) => Box::new(StdRng::seed_from_u64(s)),
-            None => Box::new(rand::rng()),
+        util::validate_finite(data)?;
+
+        // Normalize tolerance by data variance so it scales with data magnitude.
+        // Without this, the raw tol is compared against the sum of k*d squared
+        // centroid shifts, which becomes meaninglessly tight for high-dimensional
+        // or large-scale data. (Matches scikit-learn's _tolerance approach.)
+        let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
+
+        // Initialize RNG.
+        let mut rng = match self.seed {
+            Some(s) => StdRng::seed_from_u64(s),
+            None => StdRng::from_os_rng(),
         };
 
-        // Initialize centroids
-        let mut centroids = self.init_centroids(&data_arr, &mut rng);
+        // Initialize centroids via k-means++.
+        let mut centroids =
+            util::kmeanspp_init(data, self.k, &self.metric, self.seeding_alpha, &mut rng);
         let mut labels = vec![0usize; n];
 
         let mut iters = 0usize;
         for iter in 0..self.max_iter {
             iters = iter + 1;
 
-            // Assignment step - parallel when feature enabled
+            // Assignment step.
             #[cfg(feature = "parallel")]
             {
                 let centroids_ref = &centroids;
                 let metric = &self.metric;
                 labels.par_iter_mut().enumerate().for_each(|(i, label)| {
-                    let point = data_arr.row(i);
-                    let point_slice = point.as_slice().unwrap();
-                    let mut best_cluster = 0;
-                    let mut best_dist = f32::MAX;
-
-                    for k in 0..self.k {
-                        let centroid = centroids_ref.row(k);
-                        let centroid_slice = centroid.as_slice().unwrap();
-                        let dist = metric.distance(point_slice, centroid_slice);
-                        if dist < best_dist {
-                            best_dist = dist;
-                            best_cluster = k;
-                        }
-                    }
-                    *label = best_cluster;
+                    *label = util::assign_nearest(&data[i], centroids_ref, metric);
                 });
             }
 
             #[cfg(not(feature = "parallel"))]
             for (i, label) in labels.iter_mut().enumerate() {
-                let point = data_arr.row(i);
-                let point_slice = point.as_slice().unwrap();
-                let mut best_cluster = 0;
-                let mut best_dist = f32::MAX;
-
-                for k in 0..self.k {
-                    let centroid = centroids.row(k);
-                    let centroid_slice = centroid.as_slice().unwrap();
-                    let dist = self.metric.distance(point_slice, centroid_slice);
-                    if dist < best_dist {
-                        best_dist = dist;
-                        best_cluster = k;
-                    }
-                }
-                *label = best_cluster;
+                *label = util::assign_nearest(&data[i], &centroids, &self.metric);
             }
 
-            // Update step
-            let mut new_centroids = Array2::zeros((self.k, d));
+            // Update step: recompute centroids as mean of assigned points.
+            let mut new_centroids = vec![vec![0.0f32; d]; self.k];
             let mut counts = vec![0usize; self.k];
 
             for i in 0..n {
                 let k = labels[i];
                 for j in 0..d {
-                    new_centroids[[k, j]] += data_arr[[i, j]];
+                    new_centroids[k][j] += data[i][j];
                 }
                 counts[k] += 1;
             }
 
             for k in 0..self.k {
                 if counts[k] > 0 {
-                    for j in 0..d {
-                        new_centroids[[k, j]] /= counts[k] as f32;
+                    let divisor = counts[k] as f32;
+                    for val in &mut new_centroids[k] {
+                        *val /= divisor;
                     }
                 } else {
-                    // Empty cluster: reinitialize randomly
-                    let idx = rng.random_range(0..n);
-                    new_centroids.row_mut(k).assign(&data_arr.row(idx));
+                    // Empty cluster: split the largest cluster by moving the
+                    // farthest point from its centroid. More stable than random
+                    // reinitialization, which can cause oscillation (Hamerly 2010).
+                    let largest = counts
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, &c)| c)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0);
+                    let mut farthest_idx = 0;
+                    let mut farthest_dist = -1.0f32;
+                    for (i, &label) in labels.iter().enumerate() {
+                        if label == largest {
+                            let dist = self.metric.distance(&data[i], &new_centroids[largest]);
+                            if dist > farthest_dist {
+                                farthest_dist = dist;
+                                farthest_idx = i;
+                            }
+                        }
+                    }
+                    new_centroids[k] = data[farthest_idx].clone();
                 }
             }
 
-            // Check convergence
+            // Check convergence: total squared shift across all centroid elements.
             let shift: f32 = centroids
                 .iter()
                 .zip(new_centroids.iter())
-                .map(|(a, b)| (a - b).powi(2))
+                .flat_map(|(old, new)| old.iter().zip(new.iter()).map(|(a, b)| (a - b).powi(2)))
                 .sum();
 
             centroids = new_centroids;
 
-            if shift < self.tol as f32 {
+            if shift < effective_tol {
                 break;
             }
         }
 
-        let mut centroids_vec = Vec::with_capacity(self.k);
-        for k in 0..self.k {
-            centroids_vec.push(centroids.row(k).to_vec());
-        }
-
         Ok(KmeansFit {
-            centroids: centroids_vec,
+            centroids,
             labels,
             iters,
             metric: self.metric.clone(),
         })
     }
-
-    /// Initialize centroids using k-means++ algorithm.
-    fn init_centroids(&self, data: &Array2<f32>, rng: &mut impl Rng) -> Array2<f32> {
-        let n = data.nrows();
-        let d = data.ncols();
-        let mut centroids = Array2::zeros((self.k, d));
-
-        // First centroid: random point
-        let first = rng.random_range(0..n);
-        centroids.row_mut(0).assign(&data.row(first));
-
-        // Remaining centroids: k-means++ selection
-        for i in 1..self.k {
-            let mut distances: Vec<f32> = Vec::with_capacity(n);
-
-            for j in 0..n {
-                let point = data.row(j);
-                let point_slice = point.as_slice().unwrap();
-                let min_dist = (0..i)
-                    .map(|c| {
-                        let centroid = centroids.row(c);
-                        let centroid_slice = centroid.as_slice().unwrap();
-                        self.metric.distance(point_slice, centroid_slice)
-                    })
-                    .fold(f32::MAX, f32::min);
-                distances.push(min_dist);
-            }
-
-            // Sample proportional to distance^alpha.
-            // Note: distances currently contains D(x) as measured by the metric.
-            // For standard k-means++ with squared Euclidean, this is already D(x)^2.
-            // General case: w(x) = distances[j]^(alpha/2).
-            // When metric is SquaredEuclidean and alpha=2, this gives D(x)^1 = D(x),
-            // which matches the standard behavior since distances already contain D(x)^2.
-            let weights: Vec<f32> = distances
-                .iter()
-                .map(|&d| d.powf(self.seeding_alpha / 2.0))
-                .collect();
-            let total: f32 = weights.iter().sum();
-
-            if total == 0.0 {
-                let idx = rng.random_range(0..n);
-                centroids.row_mut(i).assign(&data.row(idx));
-                continue;
-            }
-
-            let threshold = rng.random::<f32>() * total;
-            let mut cumsum = 0.0;
-            let mut selected = 0;
-
-            for (j, &w) in weights.iter().enumerate() {
-                cumsum += w;
-                if cumsum >= threshold {
-                    selected = j;
-                    break;
-                }
-            }
-
-            centroids.row_mut(i).assign(&data.row(selected));
-        }
-
-        centroids
-    }
 }
 
-impl<D: DistanceMetric> Clustering for Kmeans<D> {
-    fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+impl<D: DistanceMetric> Kmeans<D> {
+    /// Fit and return one cluster label per input point.
+    pub fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         Ok(self.fit(data)?.labels)
     }
 
-    fn n_clusters(&self) -> usize {
+    /// The configured number of clusters.
+    pub fn n_clusters(&self) -> usize {
         self.k
     }
 }
@@ -623,5 +529,78 @@ mod tests {
         let new_data = vec![vec![0.05, 0.05], vec![10.05, 10.05]];
         let predicted = fit.predict(&new_data).unwrap();
         assert_ne!(predicted[0], predicted[1]);
+    }
+
+    /// NaN input should be rejected, not silently produce garbage.
+    #[test]
+    fn nan_input_rejected() {
+        let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0]];
+        let result = Kmeans::new(2).with_seed(42).fit_predict(&data);
+        assert!(result.is_err());
+    }
+
+    /// Infinity input should be rejected.
+    #[test]
+    fn inf_input_rejected() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, f32::INFINITY]];
+        let result = Kmeans::new(2).with_seed(42).fit_predict(&data);
+        assert!(result.is_err());
+    }
+
+    /// All-identical points: k-means should converge quickly without error.
+    #[test]
+    fn all_identical_points() {
+        let data = vec![vec![5.0, 5.0]; 10];
+        let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+        // Should converge in very few iterations.
+        assert!(
+            fit.iters <= 3,
+            "expected fast convergence, got {} iters",
+            fit.iters
+        );
+    }
+
+    /// k=1 trivial case: single centroid should equal the data mean.
+    #[test]
+    fn k1_centroid_equals_mean() {
+        let data = vec![vec![0.0, 0.0], vec![2.0, 4.0], vec![4.0, 8.0]];
+        let fit = Kmeans::new(1).with_seed(42).fit(&data).unwrap();
+        let centroid = &fit.centroids[0];
+        assert!(
+            (centroid[0] - 2.0).abs() < 1e-4,
+            "mean[0] should be 2.0, got {}",
+            centroid[0]
+        );
+        assert!(
+            (centroid[1] - 4.0).abs() < 1e-4,
+            "mean[1] should be 4.0, got {}",
+            centroid[1]
+        );
+    }
+
+    /// Self-identity oracle: feeding centroids back as input should assign each
+    /// to itself (catches distance/assignment bugs).
+    #[test]
+    fn self_identity_oracle() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+        let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+        let predicted = fit.predict(&fit.centroids).unwrap();
+        for (k, &label) in predicted.iter().enumerate() {
+            assert_eq!(label, k, "centroid {k} should map to cluster {k}");
+        }
+    }
+
+    /// 1-dimensional data should work without error.
+    #[test]
+    fn scalar_data_d1() {
+        let data = vec![vec![0.0], vec![0.1], vec![10.0], vec![10.1]];
+        let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
+        assert_eq!(labels[0], labels[1]);
+        assert_ne!(labels[0], labels[2]);
     }
 }

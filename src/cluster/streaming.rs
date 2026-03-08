@@ -1,6 +1,6 @@
 //! Streaming (online) clustering algorithms.
 //!
-//! Unlike batch clustering ([`Clustering`](super::Clustering)) which requires
+//! Unlike batch clustering (e.g. [`Kmeans`](super::Kmeans)) which requires
 //! all data upfront, streaming algorithms process data incrementally. This is
 //! useful when data arrives in a continuous stream, when the full dataset does
 //! not fit in memory, or when you need to update clusters as new observations
@@ -43,32 +43,9 @@
 //! Sculley, D. (2010). "Web-Scale K-Means Clustering." WWW 2010.
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::util;
 use crate::error::{Error, Result};
 use rand::prelude::*;
-
-/// Trait for streaming/online clustering algorithms.
-///
-/// Unlike batch [`Clustering`](super::Clustering) which requires all data upfront,
-/// streaming algorithms process data incrementally.
-pub trait StreamingClustering {
-    /// Update the model with a single new point, returning its cluster assignment.
-    fn update(&mut self, point: &[f32]) -> Result<usize>;
-
-    /// Update the model with a mini-batch of points.
-    fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>>;
-
-    /// Get current cluster centroids.
-    fn centroids(&self) -> &[Vec<f32>];
-
-    /// Get the per-centroid assignment count.
-    ///
-    /// Useful for downstream confidence estimation: centroids with more
-    /// assignments are more reliable.
-    fn counts(&self) -> &[usize];
-
-    /// Get the current number of clusters.
-    fn n_clusters(&self) -> usize;
-}
 
 /// Mini-Batch K-means clustering (Sculley, 2010).
 ///
@@ -77,7 +54,7 @@ pub trait StreamingClustering {
 /// use a decaying learning rate per centroid.
 ///
 /// ```
-/// use clump::cluster::streaming::{MiniBatchKmeans, StreamingClustering};
+/// use clump::MiniBatchKmeans;
 ///
 /// let mut mbk = MiniBatchKmeans::new(2).with_seed(42);
 ///
@@ -149,16 +126,7 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
 
     /// Assign a point to the nearest centroid. Requires initialized centroids.
     fn assign(&self, point: &[f32]) -> usize {
-        let mut best_cluster = 0;
-        let mut best_dist = f32::MAX;
-        for (k, centroid) in self.centroids_vec.iter().enumerate() {
-            let dist = self.metric.distance(point, centroid);
-            if dist < best_dist {
-                best_dist = dist;
-                best_cluster = k;
-            }
-        }
-        best_cluster
+        util::assign_nearest(point, &self.centroids_vec, &self.metric)
     }
 
     /// Update a single centroid with a new point using the decaying learning rate.
@@ -190,47 +158,8 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
             });
         }
 
-        self.centroids_vec = Vec::with_capacity(self.k);
+        self.centroids_vec = util::kmeanspp_init(points, self.k, &self.metric, 2.0, &mut self.rng);
         self.counts = vec![0; self.k];
-
-        // First centroid: random point.
-        let first = self.rng.random_range(0..n);
-        self.centroids_vec.push(points[first].clone());
-
-        // Remaining centroids: k-means++ (D^2 weighting).
-        for _ in 1..self.k {
-            let mut distances: Vec<f32> = Vec::with_capacity(n);
-            for point in points {
-                let min_dist = self
-                    .centroids_vec
-                    .iter()
-                    .map(|c| self.metric.distance(point, c))
-                    .fold(f32::MAX, f32::min);
-                distances.push(min_dist);
-            }
-
-            let total: f32 = distances.iter().sum();
-            if total == 0.0 {
-                // Degenerate: pick random.
-                let idx = self.rng.random_range(0..n);
-                self.centroids_vec.push(points[idx].clone());
-                continue;
-            }
-
-            let threshold = self.rng.random::<f32>() * total;
-            let mut cumsum = 0.0;
-            let mut selected = 0;
-            for (j, &d) in distances.iter().enumerate() {
-                cumsum += d;
-                if cumsum >= threshold {
-                    selected = j;
-                    break;
-                }
-            }
-
-            self.centroids_vec.push(points[selected].clone());
-        }
-
         self.initialized = true;
         Ok(())
     }
@@ -250,13 +179,23 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
     }
 }
 
-impl<D: DistanceMetric> StreamingClustering for MiniBatchKmeans<D> {
-    fn update(&mut self, point: &[f32]) -> Result<usize> {
+impl<D: DistanceMetric> MiniBatchKmeans<D> {
+    /// Update the model with a single new point, returning its cluster assignment.
+    pub fn update(&mut self, point: &[f32]) -> Result<usize> {
         if point.is_empty() {
             return Err(Error::InvalidParameter {
                 name: "point",
                 message: "must be non-empty",
             });
+        }
+
+        for &val in point {
+            if !val.is_finite() {
+                return Err(Error::InvalidParameter {
+                    name: "data",
+                    message: "contains NaN or infinity",
+                });
+            }
         }
 
         if !self.initialized {
@@ -280,7 +219,8 @@ impl<D: DistanceMetric> StreamingClustering for MiniBatchKmeans<D> {
         Ok(cluster)
     }
 
-    fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
+    /// Update the model with a mini-batch of points.
+    pub fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
         if points.is_empty() {
             return Err(Error::EmptyInput);
         }
@@ -303,6 +243,8 @@ impl<D: DistanceMetric> StreamingClustering for MiniBatchKmeans<D> {
             }
         }
 
+        util::validate_finite(points)?;
+
         if !self.initialized {
             self.init_centroids(points)?;
         } else {
@@ -320,15 +262,18 @@ impl<D: DistanceMetric> StreamingClustering for MiniBatchKmeans<D> {
         Ok(labels)
     }
 
-    fn centroids(&self) -> &[Vec<f32>] {
+    /// Get current cluster centroids.
+    pub fn centroids(&self) -> &[Vec<f32>] {
         &self.centroids_vec
     }
 
-    fn counts(&self) -> &[usize] {
+    /// Get the per-centroid assignment count.
+    pub fn counts(&self) -> &[usize] {
         &self.counts
     }
 
-    fn n_clusters(&self) -> usize {
+    /// Get the current number of clusters.
+    pub fn n_clusters(&self) -> usize {
         self.k
     }
 }
@@ -372,7 +317,6 @@ mod tests {
     #[test]
     fn converges_to_same_structure_as_batch_kmeans() {
         use crate::cluster::kmeans::Kmeans;
-        use crate::cluster::traits::Clustering;
 
         let data = well_separated_data();
 
@@ -535,6 +479,30 @@ mod tests {
             centroids_after_1[old_ca],
             "centroid should shift after new batch"
         );
+    }
+
+    #[test]
+    fn nan_input_rejected_batch() {
+        let mut mbk = MiniBatchKmeans::new(2).with_seed(42);
+        let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0]];
+        let result = mbk.update_batch(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nan_input_rejected_single() {
+        let mut mbk = MiniBatchKmeans::new(1).with_seed(42);
+        let _ = mbk.update(&[1.0, 1.0]).unwrap();
+        let result = mbk.update(&[1.0, f32::NAN]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inf_input_rejected() {
+        let mut mbk = MiniBatchKmeans::new(2).with_seed(42);
+        let data = vec![vec![0.0, 0.0], vec![f32::INFINITY, 1.0]];
+        let result = mbk.update_batch(&data);
+        assert!(result.is_err());
     }
 
     #[test]

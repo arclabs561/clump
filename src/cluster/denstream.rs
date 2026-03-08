@@ -47,8 +47,6 @@
 
 use super::dbscan::{Dbscan, NOISE};
 use super::distance::{DistanceMetric, SquaredEuclidean};
-use super::streaming::StreamingClustering;
-use super::traits::Clustering;
 use crate::error::{Error, Result};
 
 /// A micro-cluster summary (CF-like structure).
@@ -86,25 +84,25 @@ impl MicroCluster {
         }
     }
 
-    /// Compute the centroid (mean of absorbed points).
+    /// Compute the centroid (decay-weighted mean of absorbed points).
     fn centroid(&self) -> Vec<f32> {
-        let n = self.n as f32;
-        self.ls.iter().map(|&x| x / n).collect()
+        let w = self.weight as f32;
+        if w <= 0.0 {
+            return self.ls.clone(); // degenerate: return raw sums
+        }
+        self.ls.iter().map(|&x| x / w).collect()
     }
 
-    /// Compute the radius: `sqrt(ss/n - (ls/n)^2)`, clamped to 0.
-    ///
-    /// Used by tests and diagnostics. Production code uses `radius_if_absorbed`
-    /// for speculative checks, but this is the canonical derived quantity.
+    /// Compute the radius: `sqrt(ss/w - (ls/w)^2)`, clamped to 0.
     #[allow(dead_code)]
     fn radius(&self) -> f32 {
-        self.radius_from(self.n as f32, &self.ls, &self.ss)
+        self.radius_from(self.weight as f32, &self.ls, &self.ss)
     }
 
     /// Compute the radius that would result from absorbing an additional point,
     /// without actually modifying the micro-cluster.
     fn radius_if_absorbed(&self, point: &[f32]) -> f32 {
-        let new_n = (self.n + 1) as f32;
+        let new_w = self.weight as f32 + 1.0;
         let new_ls: Vec<f32> = self.ls.iter().zip(point).map(|(&l, &p)| l + p).collect();
         let new_ss: Vec<f32> = self
             .ss
@@ -112,28 +110,43 @@ impl MicroCluster {
             .zip(point)
             .map(|(&s, &p)| s + p * p)
             .collect();
-        self.radius_from(new_n, &new_ls, &new_ss)
+        self.radius_from(new_w, &new_ls, &new_ss)
     }
 
     /// Shared radius computation from arbitrary CF sums.
-    fn radius_from(&self, n: f32, ls: &[f32], ss: &[f32]) -> f32 {
+    fn radius_from(&self, w: f32, ls: &[f32], ss: &[f32]) -> f32 {
+        if w <= 0.0 {
+            return 0.0;
+        }
         let mut sum = 0.0f32;
-        for ((&l, &s), _) in ls.iter().zip(ss).zip(0..ls.len()) {
-            let mean = l / n;
-            let var = s / n - mean * mean;
+        for (&l, &s) in ls.iter().zip(ss) {
+            let mean = l / w;
+            let var = s / w - mean * mean;
             sum += var;
         }
         sum.max(0.0).sqrt()
     }
 
-    /// Absorb a point into this micro-cluster, applying time decay.
-    fn absorb(&mut self, point: &[f32], decay_factor: f64, timestamp: u64) {
-        // Apply decay based on time elapsed since last update.
+    /// Apply time decay to all CF components.
+    fn apply_decay(&mut self, decay_factor: f64, timestamp: u64) {
         let elapsed = timestamp.saturating_sub(self.last_update);
         if elapsed > 0 {
-            let decay = (-decay_factor * elapsed as f64).exp();
-            self.weight *= decay;
+            let decay = (-decay_factor * elapsed as f64).exp() as f32;
+            self.weight *= decay as f64;
+            for l in &mut self.ls {
+                *l *= decay;
+            }
+            for s in &mut self.ss {
+                *s *= decay;
+            }
+            self.last_update = timestamp;
         }
+    }
+
+    /// Absorb a point into this micro-cluster, applying time decay.
+    fn absorb(&mut self, point: &[f32], decay_factor: f64, timestamp: u64) {
+        // Decay existing sums before adding the new point.
+        self.apply_decay(decay_factor, timestamp);
 
         // Add the point.
         self.n += 1;
@@ -147,12 +160,7 @@ impl MicroCluster {
 
     /// Apply time decay without absorbing a point.
     fn decay(&mut self, decay_factor: f64, timestamp: u64) {
-        let elapsed = timestamp.saturating_sub(self.last_update);
-        if elapsed > 0 {
-            let decay = (-decay_factor * elapsed as f64).exp();
-            self.weight *= decay;
-            self.last_update = timestamp;
-        }
+        self.apply_decay(decay_factor, timestamp);
     }
 }
 
@@ -162,8 +170,7 @@ impl MicroCluster {
 /// on their centroids to produce macro-clusters on demand.
 ///
 /// ```
-/// use clump::cluster::denstream::DenStream;
-/// use clump::cluster::streaming::StreamingClustering;
+/// use clump::DenStream;
 ///
 /// let mut ds = DenStream::new(1.0, 3)
 ///     .with_beta(0.5)
@@ -208,12 +215,6 @@ pub struct DenStream<D: DistanceMetric = SquaredEuclidean> {
     timestamp: u64,
     /// Counter for triggering periodic pruning.
     updates_since_prune: usize,
-    /// Cached centroids of potential micro-clusters. Invalidated on structural changes.
-    cached_centroids: Vec<Vec<f32>>,
-    /// Cached per-cluster point counts. Invalidated alongside centroids.
-    cached_counts: Vec<usize>,
-    /// Whether cached centroids/counts are valid.
-    centroids_valid: bool,
     /// Dimensionality of the first point seen (for validation).
     dim: Option<usize>,
 }
@@ -246,9 +247,6 @@ impl<D: DistanceMetric> DenStream<D> {
             o_micro_clusters: Vec::new(),
             timestamp: 0,
             updates_since_prune: 0,
-            cached_centroids: Vec::new(),
-            cached_counts: Vec::new(),
-            centroids_valid: false,
             dim: None,
         }
     }
@@ -350,22 +348,6 @@ impl<D: DistanceMetric> DenStream<D> {
         best_idx.map(|idx| (idx, best_dist))
     }
 
-    /// Invalidate the cached centroids.
-    fn invalidate_centroids(&mut self) {
-        self.centroids_valid = false;
-    }
-
-    /// Rebuild the centroid and count caches from current potential micro-clusters.
-    fn rebuild_centroids(&mut self) {
-        self.cached_centroids = self
-            .p_micro_clusters
-            .iter()
-            .map(|mc| mc.centroid())
-            .collect();
-        self.cached_counts = self.p_micro_clusters.iter().map(|mc| mc.n).collect();
-        self.centroids_valid = true;
-    }
-
     /// Prune stale micro-clusters.
     ///
     /// - Remove potential micro-clusters whose decayed weight < beta * mu.
@@ -394,8 +376,6 @@ impl<D: DistanceMetric> DenStream<D> {
             let age = current_ts.saturating_sub(mc.creation_time);
             mc.weight >= outlier_weight_threshold(lam, t_p, age, threshold)
         });
-
-        self.invalidate_centroids();
     }
 }
 
@@ -414,11 +394,21 @@ fn outlier_weight_threshold(lambda: f64, t_p: u64, age: u64, potential_threshold
     xi * potential_threshold
 }
 
-impl<D: DistanceMetric> StreamingClustering for DenStream<D> {
+impl<D: DistanceMetric> DenStream<D> {
     /// Absorb a single point, returning the index of the nearest potential
     /// micro-cluster, or `NOISE` if the point was placed in an outlier cluster.
-    fn update(&mut self, point: &[f32]) -> Result<usize> {
+    pub fn update(&mut self, point: &[f32]) -> Result<usize> {
         self.validate_point(point)?;
+
+        // Validate finite values.
+        for &val in point {
+            if !val.is_finite() {
+                return Err(Error::InvalidParameter {
+                    name: "data",
+                    message: "contains NaN or infinity",
+                });
+            }
+        }
 
         // Set dimensionality on first point.
         if self.dim.is_none() {
@@ -438,7 +428,7 @@ impl<D: DistanceMetric> StreamingClustering for DenStream<D> {
                 let new_radius = self.p_micro_clusters[idx].radius_if_absorbed(point);
                 if new_radius <= self.epsilon {
                     self.p_micro_clusters[idx].absorb(point, self.lambda, ts);
-                    self.invalidate_centroids();
+
                     assigned_p_idx = Some(idx);
                 }
             }
@@ -458,7 +448,7 @@ impl<D: DistanceMetric> StreamingClustering for DenStream<D> {
                         if self.o_micro_clusters[idx].weight >= potential_threshold {
                             let promoted = self.o_micro_clusters.remove(idx);
                             self.p_micro_clusters.push(promoted);
-                            self.invalidate_centroids();
+
                             // The promoted cluster is now the last p-cluster.
                             assigned_p_idx = Some(self.p_micro_clusters.len() - 1);
                         }
@@ -472,7 +462,7 @@ impl<D: DistanceMetric> StreamingClustering for DenStream<D> {
                 // If a single-point cluster already meets the potential threshold, add as potential.
                 if mc.weight >= potential_threshold {
                     self.p_micro_clusters.push(mc);
-                    self.invalidate_centroids();
+
                     assigned_p_idx = Some(self.p_micro_clusters.len() - 1);
                 } else {
                     self.o_micro_clusters.push(mc);
@@ -491,7 +481,8 @@ impl<D: DistanceMetric> StreamingClustering for DenStream<D> {
         Ok(assigned_p_idx.unwrap_or(NOISE))
     }
 
-    fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
+    /// Update the model with a mini-batch of points.
+    pub fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
         if points.is_empty() {
             return Err(Error::EmptyInput);
         }
@@ -503,32 +494,22 @@ impl<D: DistanceMetric> StreamingClustering for DenStream<D> {
         Ok(labels)
     }
 
-    fn centroids(&self) -> &[Vec<f32>] {
-        // The trait returns &[Vec<f32>] so we serve the cached snapshot.
-        // Callers should call `refresh_centroids()` after a batch of updates
-        // to get current values. Interior mutability would solve this but
-        // conflicts with the trait signature.
-        &self.cached_centroids
+    /// Get current cluster centroids (one per potential micro-cluster).
+    pub fn centroids(&self) -> Vec<Vec<f32>> {
+        self.p_micro_clusters
+            .iter()
+            .map(|mc| mc.centroid())
+            .collect()
     }
 
-    fn counts(&self) -> &[usize] {
-        // Returns the cached per-cluster point counts. Same staleness
-        // caveat as `centroids()` -- call `refresh_centroids()` first.
-        &self.cached_counts
+    /// Get the per-centroid point count.
+    pub fn counts(&self) -> Vec<usize> {
+        self.p_micro_clusters.iter().map(|mc| mc.n).collect()
     }
 
-    fn n_clusters(&self) -> usize {
+    /// Get the current number of potential micro-clusters.
+    pub fn n_clusters(&self) -> usize {
         self.p_micro_clusters.len()
-    }
-}
-
-impl<D: DistanceMetric> DenStream<D> {
-    /// Refresh the centroid cache. Call this before `centroids()` if you need
-    /// up-to-date values after a series of `update()` calls.
-    pub fn refresh_centroids(&mut self) {
-        if !self.centroids_valid {
-            self.rebuild_centroids();
-        }
     }
 }
 
@@ -700,7 +681,6 @@ mod tests {
             ds.update(&[i as f32, i as f32]).ok();
         }
 
-        ds.refresh_centroids();
         assert_eq!(
             ds.n_clusters(),
             ds.centroids().len(),
@@ -751,6 +731,47 @@ mod tests {
         // Verify our NOISE constant matches what callers expect.
         assert_eq!(NOISE, usize::MAX);
     }
+
+    #[test]
+    fn nan_input_rejected() {
+        let mut ds = test_denstream();
+        let result = ds.update(&[1.0, f32::NAN]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn inf_input_rejected() {
+        let mut ds = test_denstream();
+        let result = ds.update(&[f32::INFINITY, 0.0]);
+        assert!(result.is_err());
+    }
+
+    /// DenStream centroid drift under decay: after feeding many points at a new
+    /// location with time gaps, centroids should track recent data.
+    #[test]
+    fn centroid_drift_under_decay() {
+        let mut ds = DenStream::new(2.0, 2)
+            .with_beta(0.2)
+            .with_lambda(0.1) // moderate decay
+            .with_mu(1.0)
+            .with_pruning_period(10_000);
+
+        // Phase 1: 50 points at origin.
+        for _ in 0..50 {
+            ds.update(&[0.0, 0.0]).ok();
+        }
+
+        // Phase 2: 200 points at (10, 10) to overwhelm decayed origin cluster.
+        for _ in 0..200 {
+            ds.update(&[10.0, 10.0]).ok();
+        }
+
+        // After heavy decay, the centroid closest to (10, 10) should dominate.
+        let centroids = ds.centroids();
+        assert!(!centroids.is_empty());
+        let has_near_10 = centroids.iter().any(|c| c[0] > 5.0 && c[1] > 5.0);
+        assert!(has_near_10, "centroid should track recent (10,10) points");
+    }
 }
 
 #[cfg(test)]
@@ -799,7 +820,7 @@ mod proptests {
                 ds.update(point).expect("update should succeed");
             }
 
-            ds.refresh_centroids();
+
             for c in ds.centroids() {
                 prop_assert_eq!(c.len(), 5, "centroid dim should match input dim");
             }
