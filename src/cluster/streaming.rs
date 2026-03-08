@@ -60,6 +60,12 @@ pub trait StreamingClustering {
     /// Get current cluster centroids.
     fn centroids(&self) -> &[Vec<f32>];
 
+    /// Get the per-centroid assignment count.
+    ///
+    /// Useful for downstream confidence estimation: centroids with more
+    /// assignments are more reliable.
+    fn counts(&self) -> &[usize];
+
     /// Get the current number of clusters.
     fn n_clusters(&self) -> usize;
 }
@@ -318,8 +324,29 @@ impl<D: DistanceMetric> StreamingClustering for MiniBatchKmeans<D> {
         &self.centroids_vec
     }
 
+    fn counts(&self) -> &[usize] {
+        &self.counts
+    }
+
     fn n_clusters(&self) -> usize {
         self.k
+    }
+}
+
+#[cfg(test)]
+mod autotrait_tests {
+    use super::*;
+
+    /// Compile-time assertion that MiniBatchKmeans is Send + Sync + Sized + Unpin.
+    /// Catches accidental introduction of Rc, RefCell, or raw pointers.
+    /// (Pattern from linfa.)
+    fn assert_autotraits<T: Send + Sync + Sized + Unpin>() {}
+
+    #[test]
+    fn minibatch_kmeans_is_send_sync() {
+        assert_autotraits::<MiniBatchKmeans<SquaredEuclidean>>();
+        assert_autotraits::<MiniBatchKmeans<super::super::distance::Euclidean>>();
+        assert_autotraits::<MiniBatchKmeans<super::super::distance::CosineDistance>>();
     }
 }
 
@@ -520,6 +547,41 @@ mod tests {
 
         assert_eq!(labels[0], labels[1]);
         assert_ne!(labels[0], labels[20]);
+    }
+
+    /// Self-identity oracle (pattern from linfa): feed centroids back as input.
+    /// Each centroid should be assigned to itself -- catches distance/assignment bugs.
+    #[test]
+    fn self_identity_oracle() {
+        let data = well_separated_data();
+        let mut mbk = MiniBatchKmeans::new(2).with_seed(42);
+        let _ = mbk.update_batch(&data).unwrap();
+
+        let centroids: Vec<Vec<f32>> = mbk.centroids().to_vec();
+        for (k, centroid) in centroids.iter().enumerate() {
+            let label = mbk.assign(centroid);
+            assert_eq!(
+                label, k,
+                "centroid {k} should be assigned to cluster {k}, got {label}"
+            );
+        }
+    }
+
+    /// Counts should track how many points were assigned to each centroid.
+    #[test]
+    fn counts_track_assignments() {
+        let data = well_separated_data(); // 20 near origin + 20 near (100,100)
+        let mut mbk = MiniBatchKmeans::new(2).with_seed(42);
+        let _ = mbk.update_batch(&data).unwrap();
+
+        let counts = mbk.counts();
+        assert_eq!(counts.len(), 2);
+        // Each cluster should have ~20 points.
+        let total: usize = counts.iter().sum();
+        assert_eq!(total, 40, "total counts should equal number of points");
+        for &c in counts {
+            assert!(c > 0, "no empty clusters expected with well-separated data");
+        }
     }
 }
 

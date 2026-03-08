@@ -175,6 +175,41 @@ impl<D: DistanceMetric> CopKmeans<D> {
         None
     }
 
+    /// Compute transitive closure of must-link constraints via DFS.
+    ///
+    /// Returns groups of mutually must-linked indices.
+    fn transitive_closure(adjacency: &[Vec<usize>], n: usize) -> Vec<Vec<usize>> {
+        let mut visited = vec![false; n];
+        let mut groups = Vec::new();
+
+        for start in 0..n {
+            if visited[start] || adjacency[start].is_empty() {
+                continue;
+            }
+
+            let mut group = Vec::new();
+            let mut stack = vec![start];
+
+            while let Some(node) = stack.pop() {
+                if visited[node] {
+                    continue;
+                }
+                visited[node] = true;
+                group.push(node);
+
+                for &neighbor in &adjacency[node] {
+                    if !visited[neighbor] {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+
+            groups.push(group);
+        }
+
+        groups
+    }
+
     /// Initialize centroids using k-means++ seeding.
     fn init_centroids(&self, data: &[Vec<f32>], rng: &mut (impl Rng + ?Sized)) -> Vec<Vec<f32>> {
         let n = data.len();
@@ -289,6 +324,35 @@ impl<D: DistanceMetric> ConstrainedClustering for CopKmeans<D> {
                 Constraint::CannotLink(a, b) => {
                     cannot_links[*a].push(*b);
                     cannot_links[*b].push(*a);
+                }
+            }
+        }
+
+        // Compute transitive closure of must-link constraints via DFS.
+        // After this, must_links[i] contains all points transitively must-linked
+        // to i (not just direct neighbors). This makes the assignment step O(1)
+        // for must-link lookups instead of requiring repeated traversal.
+        let must_link_groups = Self::transitive_closure(&must_links, n);
+        let mut must_links_closed: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for group in &must_link_groups {
+            for &member in group {
+                for &other in group {
+                    if other != member {
+                        must_links_closed[member].push(other);
+                    }
+                }
+            }
+        }
+        let must_links = must_links_closed;
+
+        // Check for contradictions: a pair that is both must-link and cannot-link.
+        for c in constraints {
+            if let Constraint::CannotLink(a, b) = c {
+                if must_links[*a].contains(b) {
+                    return Err(Error::ConstraintViolation(format!(
+                        "points {} and {} are both must-linked (transitively) and cannot-linked",
+                        a, b
+                    )));
                 }
             }
         }
@@ -423,6 +487,19 @@ impl<D: DistanceMetric> ConstrainedClustering for CopKmeans<D> {
         }
 
         Ok(labels.into_iter().map(|l| l.unwrap()).collect())
+    }
+}
+
+#[cfg(test)]
+mod autotrait_tests {
+    use super::*;
+
+    fn assert_autotraits<T: Send + Sync + Sized + Unpin>() {}
+
+    #[test]
+    fn cop_kmeans_is_send_sync() {
+        assert_autotraits::<CopKmeans<SquaredEuclidean>>();
+        assert_autotraits::<CopKmeans<super::super::distance::Euclidean>>();
     }
 }
 
@@ -601,6 +678,75 @@ mod tests {
 
         assert_eq!(labels[0], labels[1]);
         assert_ne!(labels[0], labels[2]);
+    }
+
+    /// Early contradiction detection: contradictory must-link + cannot-link
+    /// should be caught before any iteration, not as a runtime failure.
+    #[test]
+    fn transitive_contradiction_detected_early() {
+        // (0,1) must-link, (1,2) must-link => 0,1,2 transitively linked.
+        // (0,2) cannot-link => contradicts the transitive must-link.
+        let data = vec![
+            vec![0.0f32, 0.0],
+            vec![0.1, 0.1],
+            vec![0.2, 0.2],
+            vec![10.0, 10.0],
+        ];
+
+        let constraints = vec![
+            Constraint::MustLink(0, 1),
+            Constraint::MustLink(1, 2),
+            Constraint::CannotLink(0, 2),
+        ];
+
+        let result = CopKmeans::new(2)
+            .with_seed(42)
+            .fit_predict_constrained(&data, &constraints);
+
+        assert!(result.is_err(), "transitive contradiction should be caught");
+        if let Err(Error::ConstraintViolation(msg)) = result {
+            assert!(
+                msg.contains("must-linked") && msg.contains("cannot-linked"),
+                "error should mention both constraint types: {msg}"
+            );
+        }
+    }
+
+    /// Monotonicity: adding a must-link between two points already in the
+    /// same cluster should not change the partition.
+    #[test]
+    fn monotonicity_same_cluster_must_link() {
+        let data = vec![
+            vec![0.0f32, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+
+        // Without constraints.
+        let labels_none = CopKmeans::new(2)
+            .with_seed(42)
+            .fit_predict_constrained(&data, &[])
+            .unwrap();
+
+        // Points 0 and 1 should already be co-clustered.
+        assert_eq!(labels_none[0], labels_none[1]);
+
+        // Adding a must-link between already-co-clustered points.
+        let labels_with = CopKmeans::new(2)
+            .with_seed(42)
+            .fit_predict_constrained(&data, &[Constraint::MustLink(0, 1)])
+            .unwrap();
+
+        // Partition structure should be identical (labels may differ in absolute value).
+        assert_eq!(
+            labels_none[0] == labels_none[2],
+            labels_with[0] == labels_with[2]
+        );
+        assert_eq!(
+            labels_none[0] == labels_none[3],
+            labels_with[0] == labels_with[3]
+        );
     }
 
     #[test]
