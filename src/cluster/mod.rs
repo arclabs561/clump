@@ -84,8 +84,8 @@
 //! assert_eq!(labels.len(), data.len());
 //! ```
 
-pub mod distance;
 mod dbscan;
+pub mod distance;
 mod evoc;
 mod hdbscan;
 mod kmeans;
@@ -93,7 +93,9 @@ mod traits;
 mod util;
 
 pub use dbscan::{Dbscan, DbscanExt, NOISE};
-pub use distance::{CosineDistance, DistanceMetric, Euclidean, InnerProductDistance, SquaredEuclidean};
+pub use distance::{
+    CosineDistance, DistanceMetric, Euclidean, InnerProductDistance, SquaredEuclidean,
+};
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
 pub use hdbscan::Hdbscan;
 pub use kmeans::{Kmeans, KmeansFit};

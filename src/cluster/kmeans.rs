@@ -65,6 +65,21 @@ use rayon::prelude::*;
 ///
 /// The default metric is [`SquaredEuclidean`], which preserves backward
 /// compatibility with previous versions.
+///
+/// ```
+/// use clump::{Kmeans, Clustering};
+///
+/// let data = vec![
+///     vec![0.0f32, 0.0],
+///     vec![0.1, 0.1],
+///     vec![10.0, 10.0],
+///     vec![10.1, 10.1],
+/// ];
+///
+/// let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
+/// assert_eq!(labels[0], labels[1]);
+/// assert_ne!(labels[0], labels[2]);
+/// ```
 #[derive(Debug, Clone)]
 pub struct Kmeans<D: DistanceMetric = SquaredEuclidean> {
     /// Number of clusters.
@@ -96,6 +111,16 @@ pub struct KmeansFit<D: DistanceMetric = SquaredEuclidean> {
 
 impl<D: DistanceMetric> KmeansFit<D> {
     /// Predict cluster labels for new points using the learned centroids.
+    ///
+    /// ```
+    /// use clump::Kmeans;
+    ///
+    /// let data = vec![vec![0.0f32, 0.0], vec![10.0, 10.0]];
+    /// let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+    ///
+    /// let predicted = fit.predict(&[vec![0.05, 0.05], vec![9.9, 9.9]]).unwrap();
+    /// assert_ne!(predicted[0], predicted[1]);
+    /// ```
     pub fn predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
         if data.is_empty() {
             return Err(Error::EmptyInput);
@@ -201,6 +226,17 @@ impl<D: DistanceMetric> Kmeans<D> {
     }
 
     /// Fit k-means and return centroids, labels, and iteration count.
+    ///
+    /// ```
+    /// use clump::Kmeans;
+    ///
+    /// let data = vec![vec![0.0f32, 0.0], vec![0.1, 0.1], vec![5.0, 5.0], vec![5.1, 5.1]];
+    /// let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+    ///
+    /// assert_eq!(fit.centroids.len(), 2);
+    /// assert_eq!(fit.labels.len(), 4);
+    /// assert!(fit.iters > 0);
+    /// ```
     pub fn fit(&self, data: &[Vec<f32>]) -> Result<KmeansFit<D>> {
         if data.is_empty() {
             return Err(Error::EmptyInput);

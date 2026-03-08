@@ -50,6 +50,30 @@ use super::dbscan::NOISE;
 /// HDBSCAN clustering algorithm, generic over a distance metric.
 ///
 /// The default metric is [`Euclidean`] (L2), matching the original behavior.
+///
+/// ```
+/// use clump::{Hdbscan, Clustering, NOISE};
+///
+/// // Two tight clusters, well-separated
+/// let mut data: Vec<Vec<f32>> = (0..15).map(|i| {
+///     vec![(i % 3) as f32 * 0.1, (i / 3) as f32 * 0.1]
+/// }).collect();
+/// data.extend((0..15).map(|i| {
+///     vec![50.0 + (i % 3) as f32 * 0.1, 50.0 + (i / 3) as f32 * 0.1]
+/// }));
+///
+/// let labels = Hdbscan::new()
+///     .with_min_samples(3)
+///     .with_min_cluster_size(5)
+///     .fit_predict(&data)
+///     .unwrap();
+///
+/// assert_eq!(labels.len(), 30);
+/// // At least 2 distinct non-noise clusters found
+/// let clusters: std::collections::HashSet<_> =
+///     labels.iter().copied().filter(|&l| l != NOISE).collect();
+/// assert!(clusters.len() >= 2);
+/// ```
 #[derive(Debug, Clone)]
 pub struct Hdbscan<D: DistanceMetric = Euclidean> {
     min_samples: usize,

@@ -66,6 +66,19 @@ use crate::error::{Error, Result};
 ///
 /// The default metric is [`Euclidean`] (L2), matching the original behavior
 /// where epsilon is compared against Euclidean distance.
+///
+/// ```
+/// use clump::{Dbscan, Clustering, NOISE};
+///
+/// let data = vec![
+///     vec![0.0f32, 0.0], vec![0.1, 0.0], vec![0.0, 0.1], // cluster
+///     vec![100.0, 100.0], // outlier
+/// ];
+///
+/// let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+/// assert_eq!(labels[0], labels[1]); // same cluster
+/// assert_eq!(labels[3], NOISE);     // outlier is noise
+/// ```
 #[derive(Debug, Clone)]
 pub struct Dbscan<D: DistanceMetric = Euclidean> {
     /// Epsilon: maximum distance for neighborhood.
