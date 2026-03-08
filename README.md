@@ -12,7 +12,7 @@ Dual-licensed under MIT or Apache-2.0.
 
 ```toml
 [dependencies]
-clump = "0.2.0"
+clump = "0.3.0"
 ```
 
 ```rust
