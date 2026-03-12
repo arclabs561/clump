@@ -9,6 +9,7 @@
 //! **Streaming**: [`MiniBatchKmeans`], [`DenStream`].
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod cluster;
 pub mod error;
