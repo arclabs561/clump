@@ -12,6 +12,7 @@
 #![warn(missing_docs)]
 
 pub mod cluster;
+/// Error types for clustering operations.
 pub mod error;
 
 pub use cluster::{
