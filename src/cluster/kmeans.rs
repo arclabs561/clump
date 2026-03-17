@@ -787,4 +787,56 @@ mod tests {
             assert!(l < 100);
         }
     }
+
+    /// Empty cluster reinit: when one cluster loses all points, the
+    /// split-largest-cluster strategy should fire and produce k centroids.
+    #[test]
+    fn empty_cluster_reinit() {
+        // 3 tight clusters but ask for k=4: one cluster must be reinitialized.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.01, 0.01],
+            vec![10.0, 0.0],
+            vec![10.01, 0.01],
+            vec![0.0, 10.0],
+            vec![0.01, 10.01],
+        ];
+        let fit = Kmeans::new(4).with_seed(42).fit(&data).unwrap();
+        assert_eq!(fit.centroids.len(), 4);
+        // All points assigned.
+        assert_eq!(fit.labels.len(), 6);
+    }
+
+    /// d >> n: high-dimensional data with few points.
+    #[test]
+    fn high_dim_few_points() {
+        let data = vec![
+            vec![0.0; 200],
+            {
+                let mut v = vec![0.0; 200];
+                v[0] = 1.0;
+                v
+            },
+            vec![10.0; 200],
+            {
+                let mut v = vec![10.0; 200];
+                v[0] = 11.0;
+                v
+            },
+        ];
+        let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[2], labels[3]);
+        assert_ne!(labels[0], labels[2]);
+    }
+
+    /// Single point: n=1 with k=1 should work.
+    #[test]
+    fn single_point_k1() {
+        let data = vec![vec![42.0, 7.0]];
+        let fit = Kmeans::new(1).fit(&data).unwrap();
+        assert_eq!(fit.centroids.len(), 1);
+        assert!((fit.centroids[0][0] - 42.0).abs() < 1e-6);
+        assert!((fit.centroids[0][1] - 7.0).abs() < 1e-6);
+    }
 }
