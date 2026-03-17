@@ -826,4 +826,34 @@ mod proptests {
             }
         }
     }
+
+    /// Centroid should drift toward recent points under decay.
+    #[test]
+    fn centroid_drift_under_decay() {
+        let mut ds = DenStream::new(2.0, 2)
+            .with_beta(0.5)
+            .with_lambda(0.1)
+            .with_mu(1.0);
+
+        // Feed points near origin.
+        for _ in 0..20 {
+            ds.update(&[0.0, 0.0]).unwrap();
+        }
+        // Feed points near [10, 10] with time gaps.
+        for _ in 0..20 {
+            ds.update(&[10.0, 10.0]).unwrap();
+        }
+
+        let centroids = ds.centroids();
+        // At least one centroid should be near [10, 10].
+        let near_target = centroids.iter().any(|c| {
+            let dist_sq = c
+                .iter()
+                .zip([10.0, 10.0].iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>();
+            dist_sq < 25.0
+        });
+        assert!(near_target, "centroid should drift toward recent points");
+    }
 }

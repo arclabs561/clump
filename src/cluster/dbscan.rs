@@ -614,4 +614,56 @@ mod tests {
         assert_eq!(labels[0], labels[1]);
         assert_ne!(labels[0], labels[4]);
     }
+
+    /// Labels must be in 0..n_clusters or NOISE -- no gaps, no out-of-range.
+    #[test]
+    fn labels_range_property() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![0.2, 0.2],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+            vec![10.2, 10.2],
+            vec![50.0, 50.0], // noise
+        ];
+        let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+        let non_noise: Vec<usize> = labels.iter().copied().filter(|&l| l != NOISE).collect();
+        if !non_noise.is_empty() {
+            let max_label = *non_noise.iter().max().unwrap();
+            // Labels should be contiguous 0..=max_label.
+            for l in 0..=max_label {
+                assert!(
+                    non_noise.contains(&l),
+                    "label {l} missing from range 0..={max_label}"
+                );
+            }
+        }
+    }
+
+    /// Single point should be labeled as noise (not enough neighbors).
+    #[test]
+    fn single_point() {
+        let data = vec![vec![1.0, 2.0]];
+        let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0], NOISE);
+    }
+
+    /// d >> n: high-dimensional data with few points.
+    #[test]
+    fn high_dim_few_points() {
+        let data = vec![
+            vec![0.0; 100],
+            {
+                let mut v = vec![0.0; 100];
+                v[0] = 0.01;
+                v
+            },
+            vec![10.0; 100],
+        ];
+        let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels[0], labels[1]); // close in L2
+    }
 }
