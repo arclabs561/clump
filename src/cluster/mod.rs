@@ -65,6 +65,8 @@ mod dbscan;
 pub mod denstream;
 pub mod distance;
 mod evoc;
+#[cfg(feature = "gpu")]
+pub(crate) mod gpu;
 mod hdbscan;
 mod kmeans;
 pub mod streaming;

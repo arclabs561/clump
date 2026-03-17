@@ -155,22 +155,20 @@ impl<D: DistanceMetric> Dbscan<D> {
         label == NOISE
     }
 
-    /// Find all neighbors within epsilon.
-    fn region_query(&self, data: &[Vec<f32>], point_idx: usize) -> Vec<usize> {
-        let point = &data[point_idx];
-        data.iter()
-            .enumerate()
-            .filter(|(idx, other)| {
-                *idx != point_idx && self.metric.distance(point, other) <= self.epsilon
-            })
-            .map(|(idx, _)| idx)
+    /// Find all neighbors within epsilon using precomputed distances.
+    fn region_query_precomputed(&self, dists: &[f32], n: usize, point_idx: usize) -> Vec<usize> {
+        let row = point_idx * n;
+        (0..n)
+            .filter(|&j| j != point_idx && dists[row + j] <= self.epsilon)
             .collect()
     }
 
-    /// Expand cluster from a core point.
-    fn expand_cluster(
+    /// Expand cluster from a core point using precomputed distances.
+    #[allow(clippy::too_many_arguments)]
+    fn expand_cluster_precomputed(
         &self,
-        data: &[Vec<f32>],
+        dists: &[f32],
+        n: usize,
         point_idx: usize,
         neighbors: &[usize],
         labels: &mut [i32],
@@ -179,14 +177,9 @@ impl<D: DistanceMetric> Dbscan<D> {
     ) {
         labels[point_idx] = cluster_id;
 
-        // Use a queue for iterative expansion (avoid deep recursion)
         let mut to_process: Vec<usize> = neighbors.to_vec();
 
         while let Some(neighbor_idx) = to_process.pop() {
-            // DBSCAN nuance:
-            // - A point previously labeled NOISE can later become a border point.
-            // - We therefore assign labels *before* checking `visited` so that
-            //   previously-visited noise points can still be promoted.
             if labels[neighbor_idx] == UNCLASSIFIED || labels[neighbor_idx] == NOISE_LABEL {
                 labels[neighbor_idx] = cluster_id;
             }
@@ -196,10 +189,8 @@ impl<D: DistanceMetric> Dbscan<D> {
             }
             visited[neighbor_idx] = true;
 
-            let neighbor_neighbors = self.region_query(data, neighbor_idx);
+            let neighbor_neighbors = self.region_query_precomputed(dists, n, neighbor_idx);
 
-            // If this neighbor is also a core point, expand from it
-            // MinPts includes the point itself
             if neighbor_neighbors.len() + 1 >= self.min_pts {
                 for nn in neighbor_neighbors {
                     if !visited[nn] {
@@ -260,6 +251,18 @@ impl<D: DistanceMetric> Dbscan<D> {
 
         util::validate_finite(data)?;
 
+        // Precompute pairwise distance matrix. Each region_query scans all
+        // points, so computing O(n^2) distances upfront and looking them up
+        // in O(1) is faster than recomputing per query (O(n*d) each time).
+        let mut dists = vec![0.0f32; n * n];
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let d_val = self.metric.distance(&data[i], &data[j]);
+                dists[i * n + j] = d_val;
+                dists[j * n + i] = d_val;
+            }
+        }
+
         // Initialize: all points unclassified.
         let mut labels = vec![UNCLASSIFIED; n];
         let mut visited = vec![false; n];
@@ -271,7 +274,7 @@ impl<D: DistanceMetric> Dbscan<D> {
             }
             visited[point_idx] = true;
 
-            let neighbors = self.region_query(data, point_idx);
+            let neighbors = self.region_query_precomputed(&dists, n, point_idx);
 
             // MinPts includes the point itself, so we need >= min_pts - 1 other neighbors
             if neighbors.len() + 1 < self.min_pts {
@@ -281,8 +284,9 @@ impl<D: DistanceMetric> Dbscan<D> {
             }
 
             // Start new cluster
-            self.expand_cluster(
-                data,
+            self.expand_cluster_precomputed(
+                &dists,
+                n,
                 point_idx,
                 &neighbors,
                 &mut labels,
