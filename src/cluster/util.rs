@@ -195,7 +195,122 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
     best_cluster
 }
 
+/// Assign all points to nearest centroids using Hamerly's bounds (SDM 2010).
+///
+/// Maintains per-point upper bound (dist to assigned centroid) and lower bound
+/// (dist to second-nearest). When `upper[i] <= lower[i]`, the point's
+/// assignment cannot change and we skip all k distance computations.
+///
+/// Returns the number of points whose distances were actually recomputed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hamerly_assign<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    labels: &mut [usize],
+    upper: &mut [f32],
+    lower: &mut [f32],
+    centroid_shifts: &[f32],
+    metric: &D,
+    first_iter: bool,
+) -> usize {
+    let n = data.len();
+    let k = centroids.len();
+    let mut recomputed = 0;
+
+    if first_iter || k <= 1 {
+        // First iteration: compute all distances (no bounds yet).
+        for i in 0..n {
+            let mut best = f32::MAX;
+            let mut second = f32::MAX;
+            let mut best_k = 0;
+            for (j, c) in centroids.iter().enumerate() {
+                let d = metric.distance(&data[i], c);
+                if d < best {
+                    second = best;
+                    best = d;
+                    best_k = j;
+                } else if d < second {
+                    second = d;
+                }
+            }
+            labels[i] = best_k;
+            upper[i] = best;
+            lower[i] = second;
+        }
+        return n;
+    }
+
+    // Update bounds based on centroid movement.
+    // upper[i] += shift of assigned centroid (could have gotten farther)
+    // lower[i] -= max shift of any other centroid (could have gotten closer)
+    let max_shift = centroid_shifts.iter().copied().fold(0.0f32, f32::max);
+    let mut second_max_shift = 0.0f32;
+    let mut max_shift_idx = 0;
+    for (j, &s) in centroid_shifts.iter().enumerate() {
+        if s >= max_shift {
+            max_shift_idx = j;
+        }
+    }
+    for (j, &s) in centroid_shifts.iter().enumerate() {
+        if j != max_shift_idx && s > second_max_shift {
+            second_max_shift = s;
+        }
+    }
+
+    for i in 0..n {
+        upper[i] += centroid_shifts[labels[i]];
+        // Lower bound decreases by the maximum shift of any centroid
+        // other than the assigned one.
+        let relevant_max = if labels[i] == max_shift_idx {
+            second_max_shift
+        } else {
+            max_shift
+        };
+        lower[i] -= relevant_max;
+
+        // Hamerly test: if upper bound <= lower bound, assignment is unchanged.
+        if upper[i] <= lower[i] {
+            continue;
+        }
+
+        // Tighten upper bound by recomputing distance to assigned centroid.
+        upper[i] = metric.distance(&data[i], &centroids[labels[i]]);
+
+        if upper[i] <= lower[i] {
+            continue;
+        }
+
+        // Must recompute all distances.
+        recomputed += 1;
+        let mut best = upper[i];
+        let mut second = f32::MAX;
+        let mut best_k = labels[i];
+        for (j, c) in centroids.iter().enumerate() {
+            if j == labels[i] {
+                if best < second {
+                    second = best;
+                }
+                continue;
+            }
+            let d = metric.distance(&data[i], c);
+            if d < best {
+                second = best;
+                best = d;
+                best_k = j;
+            } else if d < second {
+                second = d;
+            }
+        }
+        labels[i] = best_k;
+        upper[i] = best;
+        lower[i] = second;
+    }
+
+    recomputed
+}
+
 /// Compute squared L2 norms for all points: `||x||^2`.
+#[cfg(feature = "parallel")]
 pub(crate) fn precompute_sq_norms(data: &[Vec<f32>]) -> Vec<f32> {
     data.iter()
         .map(|p| p.iter().map(|&x| x * x).sum())
@@ -203,6 +318,7 @@ pub(crate) fn precompute_sq_norms(data: &[Vec<f32>]) -> Vec<f32> {
 }
 
 /// Compute squared L2 norms for centroids.
+#[cfg(feature = "parallel")]
 pub(crate) fn centroid_sq_norms(centroids: &[Vec<f32>]) -> Vec<f32> {
     centroids
         .iter()
@@ -215,6 +331,7 @@ pub(crate) fn centroid_sq_norms(centroids: &[Vec<f32>]) -> Vec<f32> {
 ///
 /// Avoids redundant per-element subtraction and squaring by reducing distance
 /// to a dot product plus two norm lookups (Flash-KMeans pattern).
+#[cfg(feature = "parallel")]
 pub(crate) fn assign_nearest_sq_euclidean(
     point: &[f32],
     point_sq_norm: f32,
