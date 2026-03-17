@@ -177,6 +177,49 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
     best_cluster
 }
 
+/// Compute squared L2 norms for all points: `||x||^2`.
+pub(crate) fn precompute_sq_norms(data: &[Vec<f32>]) -> Vec<f32> {
+    data.iter()
+        .map(|p| p.iter().map(|&x| x * x).sum())
+        .collect()
+}
+
+/// Compute squared L2 norms for centroids.
+pub(crate) fn centroid_sq_norms(centroids: &[Vec<f32>]) -> Vec<f32> {
+    centroids
+        .iter()
+        .map(|c| c.iter().map(|&x| x * x).sum())
+        .collect()
+}
+
+/// Assign a point to the nearest centroid using the expanded squared Euclidean
+/// identity: `||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c`.
+///
+/// Avoids redundant per-element subtraction and squaring by reducing distance
+/// to a dot product plus two norm lookups (Flash-KMeans pattern).
+pub(crate) fn assign_nearest_sq_euclidean(
+    point: &[f32],
+    point_sq_norm: f32,
+    centroids: &[Vec<f32>],
+    centroid_sq_norms: &[f32],
+) -> usize {
+    let mut best_cluster = 0;
+    let mut best_dist = f32::MAX;
+    for (k, centroid) in centroids.iter().enumerate() {
+        let dot: f32 = point
+            .iter()
+            .zip(centroid.iter())
+            .map(|(&a, &b)| a * b)
+            .sum();
+        let dist = point_sq_norm + centroid_sq_norms[k] - 2.0 * dot;
+        if dist < best_dist {
+            best_dist = dist;
+            best_cluster = k;
+        }
+    }
+    best_cluster
+}
+
 /// Compute an MST for a dense complete graph using Prim's algorithm.
 ///
 /// `dist_fn(i, j)` returns the edge weight between points `i` and `j`.

@@ -270,29 +270,110 @@ impl<D: DistanceMetric> Kmeans<D> {
             util::kmeanspp_init(data, self.k, &self.metric, self.seeding_alpha, &mut rng);
         let mut labels = vec![0usize; n];
 
+        // Pre-allocate working buffers outside the iteration loop to avoid
+        // per-iteration allocation overhead (AMD ROCm pattern).
+        let mut new_centroids = vec![vec![0.0f32; d]; self.k];
+        let mut counts = vec![0usize; self.k];
+
+        // Precompute point squared norms for the expanded Euclidean identity
+        // ||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c (Flash-KMeans pattern).
+        // Only beneficial for high-dimensional data where the dot product
+        // avoids redundant per-element work. For low d, LLVM autovectorizes
+        // the direct (a-b)^2 form more efficiently.
+        let use_expanded = self.metric.supports_expanded_form() && d >= 64;
+        let point_sq_norms = if use_expanded {
+            util::precompute_sq_norms(data)
+        } else {
+            Vec::new()
+        };
+        let mut c_sq_norms = Vec::new();
+
+        // GPU acceleration: initialize Metal compute pipeline for assignment
+        // when using SquaredEuclidean and problem is large enough to amortize
+        // GPU setup overhead.
+        #[cfg(feature = "gpu")]
+        let gpu_assigner = if self.metric.supports_expanded_form() && n * self.k >= 500_000 {
+            super::gpu::GpuAssigner::new()
+        } else {
+            None
+        };
+        #[cfg(feature = "gpu")]
+        let data_flat = if gpu_assigner.is_some() {
+            super::gpu::flatten(data)
+        } else {
+            Vec::new()
+        };
+
         let mut iters = 0usize;
         for iter in 0..self.max_iter {
             iters = iter + 1;
 
+            // Zero the accumulators for this iteration.
+            for c in &mut new_centroids {
+                c.fill(0.0);
+            }
+            counts.fill(0);
+
+            // Recompute centroid norms each iteration (centroids change).
+            if use_expanded {
+                c_sq_norms = util::centroid_sq_norms(&centroids);
+            }
+
             // Assignment step.
-            #[cfg(feature = "parallel")]
-            {
-                let centroids_ref = &centroids;
-                let metric = &self.metric;
-                labels.par_iter_mut().enumerate().for_each(|(i, label)| {
-                    *label = util::assign_nearest(&data[i], centroids_ref, metric);
-                });
+            // Priority: GPU > parallel CPU > expanded CPU > generic CPU.
+            #[cfg(feature = "gpu")]
+            let gpu_used = if let Some(ref assigner) = gpu_assigner {
+                let centroids_flat = super::gpu::flatten(&centroids);
+                let gpu_labels = assigner.assign(&data_flat, &centroids_flat, n, self.k, d);
+                labels.copy_from_slice(&gpu_labels);
+                true
+            } else {
+                false
+            };
+            #[cfg(not(feature = "gpu"))]
+            let gpu_used = false;
+
+            if !gpu_used {
+                #[cfg(feature = "parallel")]
+                {
+                    let centroids_ref = &centroids;
+                    let metric = &self.metric;
+                    if use_expanded {
+                        let psn = &point_sq_norms;
+                        let csn = &c_sq_norms;
+                        labels.par_iter_mut().enumerate().for_each(|(i, label)| {
+                            *label = util::assign_nearest_sq_euclidean(
+                                &data[i],
+                                psn[i],
+                                centroids_ref,
+                                csn,
+                            );
+                        });
+                    } else {
+                        labels.par_iter_mut().enumerate().for_each(|(i, label)| {
+                            *label = util::assign_nearest(&data[i], centroids_ref, metric);
+                        });
+                    }
+                }
+
+                #[cfg(not(feature = "parallel"))]
+                if use_expanded {
+                    for i in 0..n {
+                        labels[i] = util::assign_nearest_sq_euclidean(
+                            &data[i],
+                            point_sq_norms[i],
+                            &centroids,
+                            &c_sq_norms,
+                        );
+                    }
+                } else {
+                    for (i, label) in labels.iter_mut().enumerate() {
+                        *label = util::assign_nearest(&data[i], &centroids, &self.metric);
+                    }
+                }
             }
 
-            #[cfg(not(feature = "parallel"))]
-            for (i, label) in labels.iter_mut().enumerate() {
-                *label = util::assign_nearest(&data[i], &centroids, &self.metric);
-            }
-
-            // Update step: recompute centroids as mean of assigned points.
-            let mut new_centroids = vec![vec![0.0f32; d]; self.k];
-            let mut counts = vec![0usize; self.k];
-
+            // Update step: accumulate points into centroid sums.
             for i in 0..n {
                 let k = labels[i];
                 for j in 0..d {
@@ -339,7 +420,7 @@ impl<D: DistanceMetric> Kmeans<D> {
                 .flat_map(|(old, new)| old.iter().zip(new.iter()).map(|(a, b)| (a - b).powi(2)))
                 .sum();
 
-            centroids = new_centroids;
+            std::mem::swap(&mut centroids, &mut new_centroids);
 
             if shift < effective_tol {
                 break;

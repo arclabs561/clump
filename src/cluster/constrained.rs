@@ -371,16 +371,24 @@ impl<D: DistanceMetric> CopKmeans<D> {
         // Initialize centroids via k-means++.
         let mut centroids = util::kmeanspp_init(data, self.k, &self.metric, 2.0, &mut rng);
 
+        // Pre-allocate working buffers outside iteration loop.
+        let mut new_centroids = vec![vec![0.0f32; d]; self.k];
+        let mut counts = vec![0usize; self.k];
+        let mut order: Vec<usize> = (0..n).collect();
+        let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
+
         for _ in 0..self.max_iter {
             // Assignment step (constrained).
-            let mut order: Vec<usize> = (0..n).collect();
+            order.iter_mut().enumerate().for_each(|(i, v)| *v = i);
             order.shuffle(&mut rng);
             let labels =
                 self.constrained_assign(data, &centroids, &must_links, &cannot_links, &order)?;
 
             // Update step: recompute centroids.
-            let mut new_centroids = vec![vec![0.0f32; d]; self.k];
-            let mut counts = vec![0usize; self.k];
+            for c in &mut new_centroids {
+                c.fill(0.0);
+            }
+            counts.fill(0);
 
             for (i, label) in labels.iter().enumerate() {
                 let k = label.unwrap(); // All points are assigned at this stage.
@@ -410,9 +418,8 @@ impl<D: DistanceMetric> CopKmeans<D> {
                 .flat_map(|(old, new)| old.iter().zip(new.iter()).map(|(a, b)| (a - b).powi(2)))
                 .sum();
 
-            centroids = new_centroids;
+            std::mem::swap(&mut centroids, &mut new_centroids);
 
-            let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
             if shift < effective_tol {
                 break;
             }

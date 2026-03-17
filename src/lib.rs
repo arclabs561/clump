@@ -8,7 +8,8 @@
 //!
 //! **Streaming**: [`MiniBatchKmeans`], [`DenStream`].
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "gpu"), forbid(unsafe_code))]
+#![cfg_attr(feature = "gpu", deny(unsafe_code))]
 #![warn(missing_docs)]
 
 pub mod cluster;

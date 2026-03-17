@@ -13,6 +13,12 @@
 pub trait DistanceMetric: Clone + Send + Sync {
     /// Compute the distance between two vectors of equal length.
     fn distance(&self, a: &[f32], b: &[f32]) -> f32;
+
+    /// Whether this metric supports the expanded squared Euclidean identity
+    /// `||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c` for faster assignment.
+    fn supports_expanded_form(&self) -> bool {
+        false
+    }
 }
 
 /// Squared Euclidean distance: `sum((a_i - b_i)^2)`.
@@ -33,6 +39,10 @@ impl DistanceMetric for SquaredEuclidean {
                 d * d
             })
             .sum()
+    }
+
+    fn supports_expanded_form(&self) -> bool {
+        true
     }
 }
 
