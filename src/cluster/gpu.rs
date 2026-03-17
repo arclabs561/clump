@@ -57,19 +57,29 @@ kernel void kmeans_assign(
 
 /// GPU-accelerated k-means assignment context.
 ///
-/// Holds Metal device, pipeline, and command queue. Reusable across
-/// iterations to avoid per-iteration setup overhead.
+/// Holds Metal device, pipeline, command queue, and reusable buffers.
+/// Buffers for data (constant across iterations), labels, and parameters
+/// are allocated once and reused to avoid per-iteration allocation overhead.
 #[cfg(feature = "gpu")]
 pub(crate) struct GpuAssigner {
     device: Device,
     queue: CommandQueue,
     pipeline: ComputePipelineState,
+    // Reusable buffers (allocated once in new_with_buffers).
+    data_buf: Buffer,
+    label_buf: Buffer,
+    param_buf: Buffer, // packed [n, k, d] as 3 x u32
+    n: usize,
+    k: usize,
+    d: usize,
+    thread_group_size: u64,
 }
 
 #[cfg(feature = "gpu")]
 impl GpuAssigner {
-    /// Create a new GPU assigner. Returns `None` if no Metal device is available.
-    pub(crate) fn new() -> Option<Self> {
+    /// Create a new GPU assigner with pre-allocated buffers.
+    /// Returns `None` if no Metal device is available.
+    pub(crate) fn new(data_flat: &[f32], n: usize, k: usize, d: usize) -> Option<Self> {
         let device = Device::system_default()?;
         let queue = device.new_command_queue();
 
@@ -82,82 +92,71 @@ impl GpuAssigner {
             .new_compute_pipeline_state_with_function(&function)
             .ok()?;
 
+        // Pre-allocate buffers.
+        let data_buf = device.new_buffer_with_data(
+            data_flat.as_ptr() as *const _,
+            (data_flat.len() * 4) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let label_buf = device.new_buffer((n * 4) as u64, MTLResourceOptions::StorageModeShared);
+        let params: [u32; 3] = [n as u32, k as u32, d as u32];
+        let param_buf = device.new_buffer_with_data(
+            params.as_ptr() as *const _,
+            12,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let thread_group_size = pipeline.max_total_threads_per_threadgroup().min(256);
+
         Some(Self {
             device,
             queue,
             pipeline,
+            data_buf,
+            label_buf,
+            param_buf,
+            n,
+            k,
+            d,
+            thread_group_size,
         })
     }
 
     /// Run GPU assignment: find nearest centroid for each point.
     ///
-    /// `data` is N*D flattened row-major, `centroids` is K*D flattened.
-    /// Returns N labels.
+    /// Only the centroid buffer is reallocated per iteration (centroids change).
+    /// Data, label, and parameter buffers are reused.
     #[allow(unsafe_code)]
-    pub(crate) fn assign(
-        &self,
-        data_flat: &[f32],
-        centroids_flat: &[f32],
-        n: usize,
-        k: usize,
-        d: usize,
-    ) -> Vec<usize> {
-        let data_buf = self.device.new_buffer_with_data(
-            data_flat.as_ptr() as *const _,
-            (data_flat.len() * 4) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
+    pub(crate) fn assign(&self, centroids_flat: &[f32]) -> Vec<usize> {
         let cent_buf = self.device.new_buffer_with_data(
             centroids_flat.as_ptr() as *const _,
             (centroids_flat.len() * 4) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let label_buf = self
-            .device
-            .new_buffer((n * 4) as u64, MTLResourceOptions::StorageModeShared);
-
-        let n_u32 = n as u32;
-        let k_u32 = k as u32;
-        let d_u32 = d as u32;
-
-        let n_buf = self.device.new_buffer_with_data(
-            &n_u32 as *const u32 as *const _,
-            4,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let k_buf = self.device.new_buffer_with_data(
-            &k_u32 as *const u32 as *const _,
-            4,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let d_buf = self.device.new_buffer_with_data(
-            &d_u32 as *const u32 as *const _,
-            4,
             MTLResourceOptions::StorageModeShared,
         );
 
         let cmd = self.queue.new_command_buffer();
         let encoder = cmd.new_compute_command_encoder();
         encoder.set_compute_pipeline_state(&self.pipeline);
-        encoder.set_buffer(0, Some(&data_buf), 0);
+        encoder.set_buffer(0, Some(&self.data_buf), 0);
         encoder.set_buffer(1, Some(&cent_buf), 0);
-        encoder.set_buffer(2, Some(&label_buf), 0);
-        encoder.set_buffer(3, Some(&n_buf), 0);
-        encoder.set_buffer(4, Some(&k_buf), 0);
-        encoder.set_buffer(5, Some(&d_buf), 0);
+        encoder.set_buffer(2, Some(&self.label_buf), 0);
+        // Pack n, k, d as separate constant references from param_buf.
+        encoder.set_buffer(3, Some(&self.param_buf), 0); // n at offset 0
+        encoder.set_buffer(4, Some(&self.param_buf), 4); // k at offset 4
+        encoder.set_buffer(5, Some(&self.param_buf), 8); // d at offset 8
 
-        let thread_group_size = self.pipeline.max_total_threads_per_threadgroup().min(256);
-        let grid_size = MTLSize::new(n as u64, 1, 1);
-        let group_size = MTLSize::new(thread_group_size, 1, 1);
+        let grid_size = MTLSize::new(self.n as u64, 1, 1);
+        let group_size = MTLSize::new(self.thread_group_size, 1, 1);
         encoder.dispatch_threads(grid_size, group_size);
         encoder.end_encoding();
 
         cmd.commit();
         cmd.wait_until_completed();
 
-        // Read back labels.
-        let ptr = label_buf.contents() as *const u32;
-        let labels_u32 = unsafe { std::slice::from_raw_parts(ptr, n) };
+        // Read back labels. Sound: StorageModeShared + wait_until_completed
+        // guarantees the GPU has finished writing before we read.
+        let ptr = self.label_buf.contents() as *const u32;
+        let labels_u32 = unsafe { std::slice::from_raw_parts(ptr, self.n) };
         labels_u32.iter().map(|&l| l as usize).collect()
     }
 }

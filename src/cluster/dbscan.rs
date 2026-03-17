@@ -155,6 +155,48 @@ impl<D: DistanceMetric> Dbscan<D> {
         label == NOISE
     }
 
+    /// Find all neighbors within epsilon (on-demand distance computation).
+    fn region_query_ondemand(&self, data: &[Vec<f32>], point_idx: usize) -> Vec<usize> {
+        let point = &data[point_idx];
+        (0..data.len())
+            .filter(|&j| j != point_idx && self.metric.distance(point, &data[j]) <= self.epsilon)
+            .collect()
+    }
+
+    /// Expand cluster from a core point (on-demand distance computation).
+    #[allow(clippy::too_many_arguments)]
+    fn expand_cluster_ondemand(
+        &self,
+        data: &[Vec<f32>],
+        point_idx: usize,
+        neighbors: &[usize],
+        labels: &mut [i32],
+        cluster_id: i32,
+        visited: &mut [bool],
+    ) {
+        labels[point_idx] = cluster_id;
+        let mut to_process: Vec<usize> = neighbors.to_vec();
+
+        while let Some(neighbor_idx) = to_process.pop() {
+            if labels[neighbor_idx] == UNCLASSIFIED || labels[neighbor_idx] == NOISE_LABEL {
+                labels[neighbor_idx] = cluster_id;
+            }
+            if visited[neighbor_idx] {
+                continue;
+            }
+            visited[neighbor_idx] = true;
+
+            let neighbor_neighbors = self.region_query_ondemand(data, neighbor_idx);
+            if neighbor_neighbors.len() + 1 >= self.min_pts {
+                for nn in neighbor_neighbors {
+                    if !visited[nn] {
+                        to_process.push(nn);
+                    }
+                }
+            }
+        }
+    }
+
     /// Find all neighbors within epsilon using precomputed distances.
     fn region_query_precomputed(&self, dists: &[f32], n: usize, point_idx: usize) -> Vec<usize> {
         let row = point_idx * n;
@@ -251,49 +293,77 @@ impl<D: DistanceMetric> Dbscan<D> {
 
         util::validate_finite(data)?;
 
-        // Precompute pairwise distance matrix. Each region_query scans all
-        // points, so computing O(n^2) distances upfront and looking them up
-        // in O(1) is faster than recomputing per query (O(n*d) each time).
-        let mut dists = vec![0.0f32; n * n];
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let d_val = self.metric.distance(&data[i], &data[j]);
-                dists[i * n + j] = d_val;
-                dists[j * n + i] = d_val;
-            }
-        }
-
         // Initialize: all points unclassified.
         let mut labels = vec![UNCLASSIFIED; n];
         let mut visited = vec![false; n];
         let mut cluster_id: i32 = 0;
 
-        for point_idx in 0..n {
-            if visited[point_idx] {
-                continue;
+        // Precompute pairwise distance matrix when it fits in memory
+        // (n^2 * 4 bytes). Cap at ~256MB to avoid OOM on large datasets.
+        // For n <= ~8000 this is always safe; beyond that, fall back to
+        // on-demand distance computation.
+        const MAX_MATRIX_BYTES: usize = 256 * 1024 * 1024;
+        let use_precomputed = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
+
+        if use_precomputed {
+            let mut dists = vec![0.0f32; n * n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let d_val = self.metric.distance(&data[i], &data[j]);
+                    dists[i * n + j] = d_val;
+                    dists[j * n + i] = d_val;
+                }
             }
-            visited[point_idx] = true;
 
-            let neighbors = self.region_query_precomputed(&dists, n, point_idx);
+            for point_idx in 0..n {
+                if visited[point_idx] {
+                    continue;
+                }
+                visited[point_idx] = true;
 
-            // MinPts includes the point itself, so we need >= min_pts - 1 other neighbors
-            if neighbors.len() + 1 < self.min_pts {
-                // Not enough neighbors: mark as noise (might be border later)
-                labels[point_idx] = NOISE_LABEL;
-                continue;
+                let neighbors = self.region_query_precomputed(&dists, n, point_idx);
+
+                if neighbors.len() + 1 < self.min_pts {
+                    labels[point_idx] = NOISE_LABEL;
+                    continue;
+                }
+
+                self.expand_cluster_precomputed(
+                    &dists,
+                    n,
+                    point_idx,
+                    &neighbors,
+                    &mut labels,
+                    cluster_id,
+                    &mut visited,
+                );
+                cluster_id += 1;
             }
+        } else {
+            // Large dataset: compute distances on demand.
+            for point_idx in 0..n {
+                if visited[point_idx] {
+                    continue;
+                }
+                visited[point_idx] = true;
 
-            // Start new cluster
-            self.expand_cluster_precomputed(
-                &dists,
-                n,
-                point_idx,
-                &neighbors,
-                &mut labels,
-                cluster_id,
-                &mut visited,
-            );
-            cluster_id += 1;
+                let neighbors = self.region_query_ondemand(data, point_idx);
+
+                if neighbors.len() + 1 < self.min_pts {
+                    labels[point_idx] = NOISE_LABEL;
+                    continue;
+                }
+
+                self.expand_cluster_ondemand(
+                    data,
+                    point_idx,
+                    &neighbors,
+                    &mut labels,
+                    cluster_id,
+                    &mut visited,
+                );
+                cluster_id += 1;
+            }
         }
 
         // Convert internal labels to the public `usize` representation.

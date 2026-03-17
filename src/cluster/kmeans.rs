@@ -290,18 +290,14 @@ impl<D: DistanceMetric> Kmeans<D> {
 
         // GPU acceleration: initialize Metal compute pipeline for assignment
         // when using SquaredEuclidean and problem is large enough to amortize
-        // GPU setup overhead.
+        // GPU setup overhead. Buffers for data, labels, and params are allocated
+        // once here and reused across iterations.
         #[cfg(feature = "gpu")]
         let gpu_assigner = if self.metric.supports_expanded_form() && n * self.k >= 500_000 {
-            super::gpu::GpuAssigner::new()
+            let data_flat = super::gpu::flatten(data);
+            super::gpu::GpuAssigner::new(&data_flat, n, self.k, d)
         } else {
             None
-        };
-        #[cfg(feature = "gpu")]
-        let data_flat = if gpu_assigner.is_some() {
-            super::gpu::flatten(data)
-        } else {
-            Vec::new()
         };
 
         let mut iters = 0usize;
@@ -324,7 +320,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             #[cfg(feature = "gpu")]
             let gpu_used = if let Some(ref assigner) = gpu_assigner {
                 let centroids_flat = super::gpu::flatten(&centroids);
-                let gpu_labels = assigner.assign(&data_flat, &centroids_flat, n, self.k, d);
+                let gpu_labels = assigner.assign(&centroids_flat);
                 labels.copy_from_slice(&gpu_labels);
                 true
             } else {

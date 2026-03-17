@@ -114,31 +114,40 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
     let n = data.len();
     let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(k);
 
+    // Maintain per-point minimum distance to any selected centroid.
+    // Avoids recomputing distances to all centroids each round --
+    // only the new centroid needs checking (Rodriguez Corominas et al. 2024).
+    let mut min_dists = vec![f32::MAX; n];
+
     // First centroid: random point.
     let first = rng.random_range(0..n);
     centroids.push(data[first].clone());
 
+    // Update min_dists for the first centroid.
+    for i in 0..n {
+        let d = metric.distance(&data[i], &centroids[0]);
+        min_dists[i] = d.max(0.0);
+    }
+
     // Remaining centroids: k-means++ selection.
     for _ in 1..k {
-        let mut distances: Vec<f32> = Vec::with_capacity(n);
-        for point in data {
-            let min_dist = centroids
-                .iter()
-                .map(|c| metric.distance(point, c))
-                .fold(f32::MAX, f32::min);
-            // Clamp negative distances (e.g. InnerProductDistance) to 0.
-            distances.push(min_dist.max(0.0));
-        }
-
         // Weight = distance^(alpha/2). For SquaredEuclidean with alpha=2,
         // this gives D(x)^1 = D(x), matching standard behavior since
         // SquaredEuclidean distances are already squared.
-        let weights: Vec<f32> = distances.iter().map(|&d| d.powf(alpha / 2.0)).collect();
+        let weights: Vec<f32> = min_dists.iter().map(|&d| d.powf(alpha / 2.0)).collect();
         let total: f32 = weights.iter().sum();
 
         if total == 0.0 || !total.is_finite() {
             let idx = rng.random_range(0..n);
             centroids.push(data[idx].clone());
+            // Update min_dists for the new centroid.
+            let new_c = centroids.last().unwrap();
+            for i in 0..n {
+                let d = metric.distance(&data[i], new_c).max(0.0);
+                if d < min_dists[i] {
+                    min_dists[i] = d;
+                }
+            }
             continue;
         }
 
@@ -154,6 +163,15 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
         }
 
         centroids.push(data[selected].clone());
+
+        // Update min_dists: only check the newly added centroid.
+        let new_c = centroids.last().unwrap();
+        for i in 0..n {
+            let d = metric.distance(&data[i], new_c).max(0.0);
+            if d < min_dists[i] {
+                min_dists[i] = d;
+            }
+        }
     }
 
     centroids
