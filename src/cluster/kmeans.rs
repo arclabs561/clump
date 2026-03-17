@@ -275,17 +275,25 @@ impl<D: DistanceMetric> Kmeans<D> {
         let mut new_centroids = vec![vec![0.0f32; d]; self.k];
         let mut counts = vec![0usize; self.k];
 
-        // Precompute point squared norms for the expanded Euclidean identity
-        // ||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c (Flash-KMeans pattern).
-        // Only beneficial for high-dimensional data where the dot product
-        // avoids redundant per-element work. For low d, LLVM autovectorizes
-        // the direct (a-b)^2 form more efficiently.
+        // Hamerly bounds: per-point upper (dist to assigned centroid) and
+        // lower (dist to second-nearest centroid). When upper <= lower,
+        // the assignment cannot change and we skip distance computation.
+        // O(n) extra memory (Hamerly, SDM 2010).
+        let mut upper_bounds = vec![f32::MAX; n];
+        let mut lower_bounds = vec![0.0f32; n];
+        let mut centroid_shifts = vec![0.0f32; self.k];
+
+        // Expanded squared Euclidean (||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c)
+        // used only in the parallel path where Hamerly bounds aren't available.
+        #[cfg(feature = "parallel")]
         let use_expanded = self.metric.supports_expanded_form() && d >= 64;
+        #[cfg(feature = "parallel")]
         let point_sq_norms = if use_expanded {
             util::precompute_sq_norms(data)
         } else {
             Vec::new()
         };
+        #[cfg(feature = "parallel")]
         let mut c_sq_norms = Vec::new();
 
         // GPU acceleration: initialize Metal compute pipeline for assignment
@@ -310,7 +318,8 @@ impl<D: DistanceMetric> Kmeans<D> {
             }
             counts.fill(0);
 
-            // Recompute centroid norms each iteration (centroids change).
+            // Recompute centroid norms each iteration (parallel path only).
+            #[cfg(feature = "parallel")]
             if use_expanded {
                 c_sq_norms = util::centroid_sq_norms(&centroids);
             }
@@ -330,8 +339,28 @@ impl<D: DistanceMetric> Kmeans<D> {
             let gpu_used = false;
 
             if !gpu_used {
+                // Hamerly bounds-based assignment: skips distance computation
+                // for points whose assignment provably cannot change.
+                // Falls back to brute-force on first iteration.
+                #[cfg(not(feature = "parallel"))]
+                {
+                    util::hamerly_assign(
+                        data,
+                        &centroids,
+                        &mut labels,
+                        &mut upper_bounds,
+                        &mut lower_bounds,
+                        &centroid_shifts,
+                        &self.metric,
+                        iter == 0,
+                    );
+                }
+
                 #[cfg(feature = "parallel")]
                 {
+                    // Parallel path: Hamerly bounds are per-point state that
+                    // requires sequential update. Use brute-force parallel
+                    // assignment instead.
                     let centroids_ref = &centroids;
                     let metric = &self.metric;
                     if use_expanded {
@@ -349,22 +378,6 @@ impl<D: DistanceMetric> Kmeans<D> {
                         labels.par_iter_mut().enumerate().for_each(|(i, label)| {
                             *label = util::assign_nearest(&data[i], centroids_ref, metric);
                         });
-                    }
-                }
-
-                #[cfg(not(feature = "parallel"))]
-                if use_expanded {
-                    for i in 0..n {
-                        labels[i] = util::assign_nearest_sq_euclidean(
-                            &data[i],
-                            point_sq_norms[i],
-                            &centroids,
-                            &c_sq_norms,
-                        );
-                    }
-                } else {
-                    for (i, label) in labels.iter_mut().enumerate() {
-                        *label = util::assign_nearest(&data[i], &centroids, &self.metric);
                     }
                 }
             }
@@ -409,12 +422,18 @@ impl<D: DistanceMetric> Kmeans<D> {
                 }
             }
 
-            // Check convergence: total squared shift across all centroid elements.
-            let shift: f32 = centroids
-                .iter()
-                .zip(new_centroids.iter())
-                .flat_map(|(old, new)| old.iter().zip(new.iter()).map(|(a, b)| (a - b).powi(2)))
-                .sum();
+            // Compute per-centroid shift distances for Hamerly bounds update
+            // and total shift for convergence check.
+            let mut shift = 0.0f32;
+            for k in 0..self.k {
+                let s: f32 = centroids[k]
+                    .iter()
+                    .zip(new_centroids[k].iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum();
+                centroid_shifts[k] = self.metric.distance(&centroids[k], &new_centroids[k]);
+                shift += s;
+            }
 
             std::mem::swap(&mut centroids, &mut new_centroids);
 
