@@ -19,6 +19,15 @@ pub trait DistanceMetric: Clone + Send + Sync {
     fn supports_expanded_form(&self) -> bool {
         false
     }
+
+    /// Whether centroids should be L2-normalized after each update step.
+    ///
+    /// For cosine-based k-means, the correct centroid is the L2-normalized
+    /// mean of assigned points (Dhillon & Modha 2001). Without normalization,
+    /// centroids drift off the unit sphere and convergence degrades.
+    fn normalize_centroids(&self) -> bool {
+        false
+    }
 }
 
 /// Squared Euclidean distance: `sum((a_i - b_i)^2)`.
@@ -64,6 +73,10 @@ impl DistanceMetric for Euclidean {
 pub struct CosineDistance;
 
 impl DistanceMetric for CosineDistance {
+    fn normalize_centroids(&self) -> bool {
+        true
+    }
+
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());

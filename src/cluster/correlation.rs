@@ -253,43 +253,44 @@ impl CorrelationClustering {
     }
 
     /// Local search: iteratively move items to reduce disagreement cost.
+    ///
+    /// Uses first-improvement strategy: applies the first cost-reducing move
+    /// found for each item instead of scanning all candidates for the best
+    /// move. Converges faster with negligible quality loss (Elsner & Schudy 2009).
     fn local_search(&self, n_items: usize, adj: &[Vec<(usize, f32)>], labels: &mut [usize]) {
+        // Track max label to generate fresh singletons without scanning.
+        let mut next_singleton = labels.iter().copied().max().unwrap_or(0) + 1;
+
         for _ in 0..self.max_iter {
             let mut improved = false;
 
             for item in 0..n_items {
                 let current_cluster = labels[item];
 
-                // Collect candidate clusters: current, each neighbor's cluster,
-                // and a fresh singleton.
-                let fresh_singleton = labels.iter().copied().max().unwrap_or(0) + 1;
-                let mut candidates: Vec<usize> = Vec::new();
-                candidates.push(current_cluster);
-                candidates.push(fresh_singleton);
+                // Collect candidate clusters: each neighbor's cluster and a
+                // fresh singleton.
+                let mut candidates: Vec<usize> = Vec::with_capacity(adj[item].len() + 1);
+                candidates.push(next_singleton);
                 for &(neighbor, _) in &adj[item] {
                     candidates.push(labels[neighbor]);
                 }
                 candidates.sort_unstable();
                 candidates.dedup();
 
-                // Evaluate each candidate by computing delta relative to current.
-                let mut best_cluster = current_cluster;
-                let mut best_delta = 0.0f64;
-
+                // First-improvement: accept the first move that reduces cost.
                 for &candidate in &candidates {
                     if candidate == current_cluster {
                         continue;
                     }
                     let delta = move_delta(item, current_cluster, candidate, adj, labels);
-                    if delta < best_delta {
-                        best_delta = delta;
-                        best_cluster = candidate;
+                    if delta < 0.0 {
+                        labels[item] = candidate;
+                        if candidate == next_singleton {
+                            next_singleton += 1;
+                        }
+                        improved = true;
+                        break;
                     }
-                }
-
-                if best_cluster != current_cluster {
-                    labels[item] = best_cluster;
-                    improved = true;
                 }
             }
 

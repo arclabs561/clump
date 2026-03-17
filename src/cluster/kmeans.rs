@@ -48,10 +48,20 @@
 //!
 //! - **Breathing K-Means** (Fritzke, 2020): Dynamically adding/removing centroids
 //!   can escape local optima better than static k.
-//! - **$D^\alpha$ Seeding** (Bamas et al., 2023): Using sharper probability weighting
-//!   ($\alpha > 2$) during initialization can improve final cost.
+//! - **`D^alpha` Seeding** (Bamas et al., 2023): Using sharper probability weighting
+//!   (`alpha > 2`) during initialization can improve final cost.
+//! - **Hamerly bounds** (Hamerly, SDM 2010): Per-point upper/lower distance bounds
+//!   skip assignment recomputation when the bound proves assignment cannot change.
+//!   O(n) extra memory, same exact results as Lloyd's. 2-8x speedup.
+//! - **Flash-KMeans** (Yang et al., 2026): IO-aware GPU k-means using online argmin
+//!   (no N*K distance matrix) and sort-inverse centroid updates. The online argmin
+//!   pattern transfers to CPU via cache-aware tiling.
+//! - **Spherical k-means** (Dhillon & Modha, 2001): For cosine distance, centroids
+//!   must be L2-normalized after each update to stay on the unit sphere.
 //!
-//! This crate implements standard Lloyd's algorithm with **k-means++** ($\alpha=2$).
+//! This implementation uses Lloyd's algorithm with **k-means++** (`alpha=2`),
+//! **Hamerly bounds** for assignment pruning, and **incremental init**
+//! (O(n*k) instead of O(n*k^2)).
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
 use super::util;
@@ -422,6 +432,19 @@ impl<D: DistanceMetric> Kmeans<D> {
                 }
             }
 
+            // Spherical k-means: L2-normalize centroids after update when
+            // using cosine distance (Dhillon & Modha 2001).
+            if self.metric.normalize_centroids() {
+                for c in &mut new_centroids {
+                    let norm: f32 = c.iter().map(|&x| x * x).sum::<f32>().sqrt();
+                    if norm > f32::EPSILON {
+                        for val in c.iter_mut() {
+                            *val /= norm;
+                        }
+                    }
+                }
+            }
+
             // Compute per-centroid shift distances for Hamerly bounds update
             // and total shift for convergence check.
             let mut shift = 0.0f32;
@@ -698,5 +721,51 @@ mod tests {
         let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
         assert_eq!(labels[0], labels[1]);
         assert_ne!(labels[0], labels[2]);
+    }
+
+    /// Cosine k-means: centroids should be L2-normalized after fitting
+    /// (spherical k-means, Dhillon & Modha 2001).
+    #[test]
+    fn cosine_centroids_are_normalized() {
+        use crate::cluster::distance::CosineDistance;
+
+        // Points in roughly two angular directions.
+        let data = vec![
+            vec![1.0, 0.1],
+            vec![2.0, 0.2],
+            vec![0.1, 1.0],
+            vec![0.2, 2.0],
+        ];
+        let fit = Kmeans::with_metric(2, CosineDistance)
+            .with_seed(42)
+            .fit(&data)
+            .unwrap();
+
+        for (k, c) in fit.centroids.iter().enumerate() {
+            let norm: f32 = c.iter().map(|&x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-4,
+                "centroid {k} should be unit-normalized, got norm={norm}"
+            );
+        }
+    }
+
+    /// Large k stress test: k=100 on 5000 points.
+    #[test]
+    fn large_k_stress() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(42);
+        let data: Vec<Vec<f32>> = (0..5000)
+            .map(|_| (0..16).map(|_| rng.random::<f32>()).collect())
+            .collect();
+        let labels = Kmeans::new(100)
+            .with_max_iter(5)
+            .with_seed(42)
+            .fit_predict(&data)
+            .unwrap();
+        assert_eq!(labels.len(), 5000);
+        for &l in &labels {
+            assert!(l < 100);
+        }
     }
 }

@@ -23,7 +23,7 @@ Clustering algorithms for dense `f32` vectors in Rust. No unsafe code.
 
 ```toml
 [dependencies]
-clump = "0.4.0"
+clump = "0.4.2"
 ```
 
 ```rust
@@ -122,6 +122,7 @@ Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &
 | Feature | Default | Effect |
 |---------|---------|--------|
 | `parallel` | off | Enables Rayon parallelism for k-means and batch operations |
+| `gpu` | off | Metal GPU acceleration for k-means assignment (macOS only) |
 
 ## License
 

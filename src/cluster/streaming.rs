@@ -137,6 +137,15 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
         for (c, &p) in centroid.iter_mut().zip(point.iter()) {
             *c = (1.0 - eta) * *c + eta * p;
         }
+        // Spherical k-means: re-normalize after update for cosine distance.
+        if self.metric.normalize_centroids() {
+            let norm: f32 = centroid.iter().map(|&x| x * x).sum::<f32>().sqrt();
+            if norm > f32::EPSILON {
+                for val in centroid.iter_mut() {
+                    *val /= norm;
+                }
+            }
+        }
     }
 
     /// Initialize centroids from a batch using k-means++ seeding.

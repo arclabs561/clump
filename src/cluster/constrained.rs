@@ -411,6 +411,18 @@ impl<D: DistanceMetric> CopKmeans<D> {
                 }
             }
 
+            // Spherical k-means: L2-normalize centroids for cosine distance.
+            if self.metric.normalize_centroids() {
+                for c in &mut new_centroids {
+                    let norm: f32 = c.iter().map(|&x| x * x).sum::<f32>().sqrt();
+                    if norm > f32::EPSILON {
+                        for val in c.iter_mut() {
+                            *val /= norm;
+                        }
+                    }
+                }
+            }
+
             // Convergence check.
             let shift: f32 = centroids
                 .iter()
