@@ -497,9 +497,12 @@ pub(crate) fn pairwise_distance_matrix<D: DistanceMetric>(
 ///
 /// `dist_fn(i, j)` returns the edge weight between points `i` and `j`.
 /// Returns edges `(u, v, dist)`.
+///
+/// When the `parallel` feature is enabled and n >= 5000, the inner update
+/// loop is parallelized using rayon (O(n/p) per iteration with p cores).
 pub(crate) fn prim_mst(
     n: usize,
-    dist_fn: impl Fn(usize, usize) -> f32,
+    dist_fn: impl Fn(usize, usize) -> f32 + Sync,
 ) -> Vec<(usize, usize, f32)> {
     if n <= 1 {
         return Vec::new();
@@ -509,7 +512,6 @@ pub(crate) fn prim_mst(
     let mut best = vec![f32::INFINITY; n];
     let mut parent = vec![usize::MAX; n];
 
-    // Start with node 0.
     best[0] = 0.0;
     let mut next_u = 0usize;
 
@@ -520,9 +522,73 @@ pub(crate) fn prim_mst(
         }
         in_tree[u] = true;
 
-        // Fused update + find-next-min: update best[v] from u and
-        // simultaneously track the minimum for the next iteration.
-        // Saves one full O(n) scan per iteration vs separate loops.
+        // Parallel inner loop for large n.
+        #[cfg(feature = "parallel")]
+        if n >= 5000 {
+            use rayon::prelude::*;
+            // Parallel update: compute new distances and find min.
+            // Each chunk returns its local (best_v, best_val, updates).
+            let chunk_size = (n / rayon::current_num_threads().max(1)).max(256);
+            let results: Vec<(usize, f32, Vec<(usize, f32, usize)>)> = (0..n)
+                .collect::<Vec<_>>()
+                .par_chunks(chunk_size)
+                .map(|chunk| {
+                    let mut local_best_v = usize::MAX;
+                    let mut local_best_val = f32::INFINITY;
+                    let mut updates = Vec::new();
+                    for &v in chunk {
+                        if in_tree[v] {
+                            continue;
+                        }
+                        let d = dist_fn(u, v);
+                        if d < best[v] {
+                            updates.push((v, d, u));
+                        }
+                        // Use the potentially-updated value for min tracking.
+                        let current = if d < best[v] { d } else { best[v] };
+                        if current < local_best_val {
+                            local_best_val = current;
+                            local_best_v = v;
+                        }
+                    }
+                    (local_best_v, local_best_val, updates)
+                })
+                .collect();
+
+            // Apply updates sequentially.
+            for (_, _, updates) in &results {
+                for &(v, d, p) in updates {
+                    if d < best[v] {
+                        best[v] = d;
+                        parent[v] = p;
+                    }
+                }
+            }
+
+            // Find global min.
+            next_u = usize::MAX;
+            let mut next_best = f32::INFINITY;
+            for &(v, val, _) in &results {
+                if v != usize::MAX && best[v] < next_best {
+                    next_best = best[v];
+                    next_u = v;
+                }
+            }
+            // Also re-scan to find true min after updates.
+            for v in 0..n {
+                if !in_tree[v] && best[v] < next_best {
+                    next_best = best[v];
+                    next_u = v;
+                }
+            }
+
+            if next_u == usize::MAX {
+                break;
+            }
+            continue;
+        }
+
+        // Serial inner loop.
         let mut next_best = f32::INFINITY;
         next_u = usize::MAX;
         for v in 0..n {

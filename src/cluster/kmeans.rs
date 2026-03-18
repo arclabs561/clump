@@ -837,4 +837,58 @@ mod tests {
         assert!((fit.centroids[0][0] - 42.0).abs() < 1e-6);
         assert!((fit.centroids[0][1] - 7.0).abs() < 1e-6);
     }
+
+    /// WCSS must be strictly better than random assignment.
+    #[test]
+    fn wcss_better_than_random() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(42);
+        let data: Vec<Vec<f32>> = (0..200)
+            .map(|i| {
+                let center = if i < 100 { 0.0 } else { 20.0 };
+                vec![center + rng.random::<f32>(), center + rng.random::<f32>()]
+            })
+            .collect();
+
+        let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+        let kmeans_wcss = fit.wcss(&data);
+
+        // Random assignment.
+        let random_wcss: f32 = data
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let label = i % 2;
+                SquaredEuclidean.distance(p, &fit.centroids[label])
+            })
+            .sum();
+
+        assert!(
+            kmeans_wcss < random_wcss,
+            "k-means WCSS ({kmeans_wcss}) should be less than random ({random_wcss})"
+        );
+    }
+
+    /// Warm-start should produce equal or better WCSS than fresh init.
+    #[test]
+    fn warm_start_convergence() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+        let fit1 = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+        let fit2 = Kmeans::new(2)
+            .with_centroids(fit1.centroids.clone())
+            .fit(&data)
+            .unwrap();
+
+        // Warm-started from optimal centroids should converge in 1 iteration.
+        assert!(
+            fit2.iters <= 2,
+            "warm-start should converge fast, got {} iters",
+            fit2.iters
+        );
+    }
 }
