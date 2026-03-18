@@ -44,6 +44,7 @@ use rand::prelude::*;
 
 /// A pairwise constraint for semi-supervised clustering.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Constraint {
     /// These two points must be in the same cluster.
     MustLink(usize, usize),
