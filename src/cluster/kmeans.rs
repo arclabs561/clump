@@ -102,6 +102,8 @@ pub struct Kmeans<D: DistanceMetric = SquaredEuclidean> {
     seeding_alpha: f32,
     /// Distance metric.
     metric: D,
+    /// Optional initial centroids for warm-starting (skips k-means++ init).
+    init_centroids: Option<Vec<Vec<f32>>>,
 }
 
 /// Result of fitting k-means, generic over a distance metric.
@@ -169,7 +171,12 @@ impl<D: DistanceMetric> KmeansFit<D> {
 
 impl Kmeans<SquaredEuclidean> {
     /// Create a new K-means clusterer with the default squared Euclidean distance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `k == 0`.
     pub fn new(k: usize) -> Self {
+        assert!(k > 0, "k must be at least 1");
         Self {
             k,
             max_iter: 100,
@@ -177,13 +184,19 @@ impl Kmeans<SquaredEuclidean> {
             seed: None,
             seeding_alpha: 2.0,
             metric: SquaredEuclidean,
+            init_centroids: None,
         }
     }
 }
 
 impl<D: DistanceMetric> Kmeans<D> {
     /// Create a new K-means clusterer with a custom distance metric.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `k == 0`.
     pub fn with_metric(k: usize, metric: D) -> Self {
+        assert!(k > 0, "k must be at least 1");
         Self {
             k,
             max_iter: 100,
@@ -191,6 +204,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             seed: None,
             seeding_alpha: 2.0,
             metric,
+            init_centroids: None,
         }
     }
 
@@ -200,6 +214,15 @@ impl<D: DistanceMetric> Kmeans<D> {
     /// Research (Bamas et al. 2023) suggests α > 2 (e.g. 4.0) can yield better final clustering.
     pub fn with_seeding_alpha(mut self, alpha: f32) -> Self {
         self.seeding_alpha = alpha;
+        self
+    }
+
+    /// Provide initial centroids for warm-starting.
+    ///
+    /// Skips k-means++ initialization and uses these centroids directly.
+    /// The number of centroids must equal k.
+    pub fn with_centroids(mut self, centroids: Vec<Vec<f32>>) -> Self {
+        self.init_centroids = Some(centroids);
         self
     }
 
@@ -285,9 +308,19 @@ impl<D: DistanceMetric> Kmeans<D> {
             None => StdRng::from_os_rng(),
         };
 
-        // Initialize centroids via k-means++.
-        let mut centroids =
-            util::kmeanspp_init(data, self.k, &self.metric, self.seeding_alpha, &mut rng);
+        // Initialize centroids: use provided centroids (warm-start) or k-means++.
+        let mut centroids = if let Some(ref init) = self.init_centroids {
+            assert_eq!(
+                init.len(),
+                self.k,
+                "init_centroids length ({}) must equal k ({})",
+                init.len(),
+                self.k
+            );
+            init.clone()
+        } else {
+            util::kmeanspp_init(data, self.k, &self.metric, self.seeding_alpha, &mut rng)
+        };
         let mut labels = vec![0usize; n];
 
         // Pre-allocate working buffers outside the iteration loop to avoid

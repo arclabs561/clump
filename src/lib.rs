@@ -7,6 +7,12 @@
 //! [`CorrelationClustering`].
 //!
 //! **Streaming**: [`MiniBatchKmeans`], [`DenStream`].
+//!
+//! **Evaluation**: [`cluster::metrics`] -- silhouette score, Calinski-Harabasz,
+//! Davies-Bouldin index.
+//!
+//! Noise points from DBSCAN/HDBSCAN are labeled with the sentinel
+//! [`NOISE`] (`usize::MAX`).
 
 #![cfg_attr(not(feature = "gpu"), forbid(unsafe_code))]
 #![cfg_attr(feature = "gpu", deny(unsafe_code))]
@@ -19,7 +25,7 @@ pub mod error;
 pub use cluster::{
     ClusterHierarchy, ClusterLayer, ClusterNode, CompositeDistance, Constraint, CopKmeans,
     CorrelationClustering, CorrelationResult, CosineDistance, Dbscan, DenStream, DistanceMetric,
-    EVoC, EVoCParams, Euclidean, Hdbscan, InnerProductDistance, Kmeans, KmeansFit, MiniBatchKmeans,
-    SignedEdge, SquaredEuclidean, NOISE,
+    EVoC, EVoCParams, Euclidean, Hdbscan, HdbscanResult, InnerProductDistance, Kmeans, KmeansFit,
+    MiniBatchKmeans, SignedEdge, SquaredEuclidean, NOISE,
 };
 pub use error::{Error, Result};

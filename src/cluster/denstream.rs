@@ -505,6 +505,35 @@ impl<D: DistanceMetric> DenStream<D> {
         Ok(labels)
     }
 
+    /// Predict the nearest potential micro-cluster for a point without
+    /// modifying the model. Returns the cluster index or `NOISE` if no
+    /// potential micro-cluster is within epsilon.
+    pub fn predict(&self, point: &[f32]) -> Result<usize> {
+        if self.p_micro_clusters.is_empty() {
+            return Err(Error::InvalidParameter {
+                name: "state",
+                message: "no potential micro-clusters exist yet",
+            });
+        }
+        if let Some(dim) = self.dim {
+            if point.len() != dim {
+                return Err(Error::DimensionMismatch {
+                    expected: dim,
+                    found: point.len(),
+                });
+            }
+        }
+        match self.nearest_micro_cluster(point, &self.p_micro_clusters) {
+            Some((idx, dist)) if dist <= self.epsilon => Ok(idx),
+            _ => Ok(super::dbscan::NOISE),
+        }
+    }
+
+    /// Predict labels for multiple points without modifying the model.
+    pub fn predict_batch(&self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
+        points.iter().map(|p| self.predict(p)).collect()
+    }
+
     /// Get current cluster centroids (one per potential micro-cluster).
     pub fn centroids(&self) -> Vec<Vec<f32>> {
         self.p_micro_clusters

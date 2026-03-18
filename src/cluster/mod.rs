@@ -85,6 +85,6 @@ pub use distance::{
     SquaredEuclidean,
 };
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
-pub use hdbscan::Hdbscan;
+pub use hdbscan::{Hdbscan, HdbscanResult};
 pub use kmeans::{Kmeans, KmeansFit};
 pub use streaming::MiniBatchKmeans;

@@ -216,6 +216,35 @@ pub fn davies_bouldin<D: DistanceMetric>(
     (db_sum / k as f64) as f32
 }
 
+/// Sampled silhouette score for large datasets.
+///
+/// Computes the silhouette score on a random sample of `sample_size` points.
+/// Error scales as O(1/sqrt(sample_size)). For n > 10k, sampling 2000-5000
+/// points gives a good estimate with O(sample^2) instead of O(n^2) cost.
+pub fn silhouette_score_sampled<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    labels: &[usize],
+    metric: &D,
+    sample_size: usize,
+    seed: u64,
+) -> f32 {
+    let n = data.len();
+    if n <= sample_size {
+        return silhouette_score(data, labels, metric);
+    }
+
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.shuffle(&mut rng);
+    indices.truncate(sample_size);
+
+    let sampled_data: Vec<Vec<f32>> = indices.iter().map(|&i| data[i].clone()).collect();
+    let sampled_labels: Vec<usize> = indices.iter().map(|&i| labels[i]).collect();
+
+    silhouette_score(&sampled_data, &sampled_labels, metric)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

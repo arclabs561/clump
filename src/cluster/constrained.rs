@@ -97,7 +97,12 @@ pub struct CopKmeans<D: DistanceMetric = SquaredEuclidean> {
 
 impl CopKmeans<SquaredEuclidean> {
     /// Create a new COP-Kmeans clusterer with default squared Euclidean distance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `k == 0`.
     pub fn new(k: usize) -> Self {
+        assert!(k > 0, "k must be at least 1");
         Self {
             k,
             max_iter: 100,
@@ -110,7 +115,12 @@ impl CopKmeans<SquaredEuclidean> {
 
 impl<D: DistanceMetric> CopKmeans<D> {
     /// Create a new COP-Kmeans clusterer with a custom distance metric.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `k == 0`.
     pub fn with_metric(k: usize, metric: D) -> Self {
+        assert!(k > 0, "k must be at least 1");
         Self {
             k,
             max_iter: 100,
