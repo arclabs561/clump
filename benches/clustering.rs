@@ -1,4 +1,7 @@
-use clump::{Constraint, CopKmeans, Dbscan, Hdbscan, Kmeans, MiniBatchKmeans};
+use clump::{
+    Constraint, CopKmeans, CorrelationClustering, Dbscan, EVoC, EVoCParams, Hdbscan, Kmeans,
+    MiniBatchKmeans, SignedEdge,
+};
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::prelude::*;
 use std::hint::black_box;
@@ -181,6 +184,52 @@ fn bench_cop_kmeans(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_evoc(c: &mut Criterion) {
+    let mut group = c.benchmark_group("evoc");
+
+    let data = synth_data(1000, 16, 42);
+    group.bench_function("n1000_d16", |b| {
+        b.iter(|| {
+            let mut evoc = EVoC::new(EVoCParams {
+                intermediate_dim: 4,
+                min_cluster_size: 5,
+                seed: Some(42),
+                ..Default::default()
+            });
+            evoc.fit_predict(black_box(&data)).unwrap()
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_correlation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("correlation");
+
+    // Generate random signed edges.
+    let mut rng = StdRng::seed_from_u64(42);
+    let n_items = 500;
+    let edges: Vec<SignedEdge> = (0..2000)
+        .map(|_| SignedEdge {
+            i: rng.random_range(0..n_items),
+            j: rng.random_range(0..n_items),
+            weight: rng.random::<f32>() * 2.0 - 1.0,
+        })
+        .filter(|e| e.i != e.j)
+        .collect();
+
+    group.bench_function("500items_2000edges", |b| {
+        b.iter(|| {
+            CorrelationClustering::new()
+                .with_seed(42)
+                .fit(n_items, black_box(&edges))
+                .unwrap()
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_kmeans,
@@ -188,5 +237,7 @@ criterion_group!(
     bench_hdbscan,
     bench_minibatch,
     bench_cop_kmeans,
+    bench_evoc,
+    bench_correlation,
 );
 criterion_main!(benches);
