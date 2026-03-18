@@ -447,22 +447,22 @@ fn project(
         None => StdRng::from_os_rng(),
     };
 
-    // Random projection matrix: intermediate_dim x original_dim.
-    let mut mat: Vec<Vec<f32>> = Vec::with_capacity(intermediate_dim);
+    // Random projection matrix: flat (intermediate_dim * original_dim).
+    // Contiguous layout for cache-friendly dot products.
+    let mut mat: Vec<f32> = Vec::with_capacity(intermediate_dim * original_dim);
     for _ in 0..intermediate_dim {
-        let mut row = Vec::with_capacity(original_dim);
+        let start = mat.len();
         for _ in 0..original_dim {
-            // Uniform in [-1, 1].
-            row.push(rng.random::<f32>() * 2.0 - 1.0);
+            mat.push(rng.random::<f32>() * 2.0 - 1.0);
         }
-        normalize_in_place(&mut row);
-        mat.push(row);
+        normalize_in_place(&mut mat[start..start + original_dim]);
     }
 
     let mut out: Vec<f32> = Vec::with_capacity(num_vectors * intermediate_dim);
     for i in 0..num_vectors {
         let v = &vectors[i * original_dim..(i + 1) * original_dim];
-        for row in &mat {
+        for j in 0..intermediate_dim {
+            let row = &mat[j * original_dim..(j + 1) * original_dim];
             out.push(dot(v, row));
         }
     }

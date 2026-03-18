@@ -216,6 +216,8 @@ impl<D: DistanceMetric> CopKmeans<D> {
     ) -> Result<Vec<Option<usize>>> {
         let n = data.len();
         let mut labels: Vec<Option<usize>> = vec![None; n];
+        // Pre-allocate candidate buffer outside the per-point loop.
+        let mut candidates: Vec<(usize, f32)> = Vec::with_capacity(self.k);
 
         for &i in order {
             // If a must-link partner is already assigned, force that cluster.
@@ -230,9 +232,9 @@ impl<D: DistanceMetric> CopKmeans<D> {
             }
 
             // Sort candidate clusters by distance (nearest first).
-            let mut candidates: Vec<(usize, f32)> = (0..self.k)
-                .map(|k| (k, self.metric.distance(&data[i], &centroids[k])))
-                .collect();
+            candidates.clear();
+            candidates
+                .extend((0..self.k).map(|k| (k, self.metric.distance(&data[i], &centroids[k]))));
             candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
             // Pick nearest valid cluster.

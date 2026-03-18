@@ -327,7 +327,6 @@ impl<D: DistanceMetric> DenStream<D> {
     }
 
     /// Find the nearest micro-cluster to a point, returning (index, distance).
-    /// Only considers micro-clusters whose centroid is within `max_dist`.
     fn nearest_micro_cluster(
         &self,
         point: &[f32],
@@ -336,9 +335,21 @@ impl<D: DistanceMetric> DenStream<D> {
         let mut best_idx = None;
         let mut best_dist = f32::MAX;
 
+        // Reuse a scratch buffer for centroid computation to avoid
+        // allocating a Vec per micro-cluster per call.
+        let d = point.len();
+        let mut centroid_buf = vec![0.0f32; d];
+
         for (i, mc) in clusters.iter().enumerate() {
-            let centroid = mc.centroid();
-            let dist = self.metric.distance(point, &centroid);
+            let w = mc.weight as f32;
+            if w > 0.0 {
+                for (j, &x) in mc.ls.iter().enumerate() {
+                    centroid_buf[j] = x / w;
+                }
+            } else {
+                centroid_buf[..d].copy_from_slice(&mc.ls[..d]);
+            }
+            let dist = self.metric.distance(point, &centroid_buf);
             if dist < best_dist {
                 best_dist = dist;
                 best_idx = Some(i);
