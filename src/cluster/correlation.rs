@@ -256,70 +256,41 @@ impl CorrelationClustering {
         labels
     }
 
-    /// Merge pass: for each pair of clusters connected by a positive edge,
-    /// compute the cost delta of merging them. Apply the best merge if it
-    /// reduces cost. Repeat until no improving merge exists.
+    /// Merge pass: compute merge delta for each inter-cluster edge pair
+    /// directly from the adjacency list (O(edges) per iteration, not O(n * edges)).
+    /// Apply the best merge. Repeat until no improving merge exists.
     fn merge_pass(n_items: usize, adj: &[Vec<(usize, f32)>], labels: &mut [usize]) {
         loop {
-            // Collect unique cluster IDs.
-            let mut clusters: Vec<usize> = labels[..n_items].to_vec();
-            clusters.sort_unstable();
-            clusters.dedup();
-            if clusters.len() <= 1 {
-                break;
-            }
+            // Accumulate merge deltas for all inter-cluster pairs in one pass
+            // over all edges. Each inter-cluster edge (i, j) with weight w
+            // contributes -w to the merge delta of (labels[i], labels[j]).
+            let mut pair_deltas: HashMap<(usize, usize), f64> = HashMap::new();
 
-            // For each pair of clusters connected by an edge, compute merge delta.
-            let mut best_delta = 0.0f64;
-            let mut best_merge = (0usize, 0usize); // (from, to)
-
-            // Build a set of candidate cluster pairs from edges.
-            let mut pairs_seen = std::collections::HashSet::new();
             for i in 0..n_items {
-                for &(j, _weight) in &adj[i] {
+                for &(j, w) in &adj[i] {
                     let (ca, cb) = (labels[i], labels[j]);
-                    if ca == cb {
-                        continue;
+                    if ca == cb || i > j {
+                        continue; // skip same-cluster and double-counting
                     }
                     let pair = (ca.min(cb), ca.max(cb));
-                    if !pairs_seen.insert(pair) {
-                        continue;
-                    }
-                    // Delta of merging ca into cb: for every inter-cluster edge,
-                    // a positive edge becomes agreement (saves weight), a negative
-                    // edge becomes disagreement (costs |weight|).
-                    let mut delta = 0.0f64;
-                    for item in 0..n_items {
-                        if labels[item] != pair.0 && labels[item] != pair.1 {
-                            continue;
-                        }
-                        for &(nbr, w) in &adj[item] {
-                            let nbr_c = labels[nbr];
-                            if labels[item] == pair.0 && nbr_c == pair.1 {
-                                // This edge goes from ca to cb. After merge,
-                                // same cluster: positive edge saves cost,
-                                // negative edge adds cost.
-                                delta -= w as f64; // same cluster = agreement costs -w for positive
-                            }
-                        }
-                    }
-                    if delta < best_delta {
-                        best_delta = delta;
-                        best_merge = pair;
-                    }
+                    *pair_deltas.entry(pair).or_insert(0.0) -= w as f64;
                 }
             }
 
-            if best_delta >= 0.0 {
-                break; // No improving merge.
-            }
+            // Find the best merge.
+            let best = pair_deltas
+                .iter()
+                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Apply merge: relabel all items in best_merge.0 to best_merge.1.
-            let (from, to) = best_merge;
-            for label in labels.iter_mut() {
-                if *label == from {
-                    *label = to;
+            match best {
+                Some((&(from, to), &delta)) if delta < 0.0 => {
+                    for label in labels[..n_items].iter_mut() {
+                        if *label == from {
+                            *label = to;
+                        }
+                    }
                 }
+                _ => break,
             }
         }
     }

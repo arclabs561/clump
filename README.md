@@ -50,16 +50,12 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 ## Streaming clustering
 
 ```rust
-use clump::{MiniBatchKmeans, DenStream, StreamingClustering};
+use clump::MiniBatchKmeans;
 
 let mut mbk = MiniBatchKmeans::new(3).with_seed(42);
-mbk.partial_fit(&batch1).unwrap();
-mbk.partial_fit(&batch2).unwrap();
-let labels = mbk.predict(&data).unwrap();
-
-let mut ds = DenStream::new(0.5, 3);
-ds.partial_fit(&batch1).unwrap();
-let labels = ds.predict(&data).unwrap();
+mbk.update_batch(&batch1).unwrap();
+mbk.update_batch(&batch2).unwrap();
+// Centroids available via mbk.centroids()
 ```
 
 ## Constrained clustering
@@ -72,9 +68,8 @@ let constraints = vec![
     Constraint::CannotLink(0, 2),
 ];
 let labels = CopKmeans::new(2)
-    .with_constraints(&constraints)
     .with_seed(42)
-    .fit_predict(&data)
+    .fit_predict_constrained(&data, &constraints)
     .unwrap();
 ```
 
@@ -87,7 +82,8 @@ let edges = vec![
     SignedEdge { i: 0, j: 1, weight: 1.0 },   // similar
     SignedEdge { i: 0, j: 2, weight: -1.0 },   // dissimilar
 ];
-let labels = CorrelationClustering::new().fit_predict_from_edges(&edges, 3).unwrap();
+let result = CorrelationClustering::new().fit(3, &edges).unwrap();
+let labels = result.labels;
 ```
 
 Also see `edges_from_distances` to build signed edges from a distance matrix.
