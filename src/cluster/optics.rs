@@ -125,18 +125,32 @@ impl<D: DistanceMetric> Optics<D> {
         let mut core_dist = vec![UNDEFINED; n];
         let mut ordering = Vec::with_capacity(n);
 
-        // Precompute: for each point, find neighbors and core distance.
-        // Core distance = distance to the min_pts-th nearest neighbor.
-        for i in 0..n {
+        // Precompute core distances. For each point, find the distance to its
+        // (min_pts-1)-th nearest neighbor within max_epsilon.
+        // Uses partial sort (select_nth_unstable) instead of full sort.
+        let compute_core = |i: usize| -> f32 {
             let mut neighbor_dists: Vec<f32> = (0..n)
                 .filter(|&j| j != i)
                 .map(|j| self.metric.distance(&data[i], &data[j]))
                 .filter(|&d| d <= self.max_epsilon)
                 .collect();
             if neighbor_dists.len() + 1 >= self.min_pts {
-                neighbor_dists.sort_by(|a, b| a.total_cmp(b));
-                core_dist[i] = neighbor_dists[self.min_pts - 2]; // -2: exclude self, 0-indexed
+                let k = self.min_pts - 2; // -2: exclude self, 0-indexed
+                neighbor_dists.select_nth_unstable_by(k, |a, b| a.total_cmp(b));
+                neighbor_dists[k]
+            } else {
+                UNDEFINED
             }
+        };
+
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            core_dist = (0..n).into_par_iter().map(compute_core).collect();
+        }
+        #[cfg(not(feature = "parallel"))]
+        for (i, cd) in core_dist.iter_mut().enumerate() {
+            *cd = compute_core(i);
         }
 
         for i in 0..n {

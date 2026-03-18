@@ -141,6 +141,11 @@ fn bench_hdbscan(c: &mut Criterion) {
         b.iter(|| Hdbscan::new().fit_predict(black_box(&data_1k)).unwrap())
     });
 
+    let data_2k = synth_data(2000, 16, 42);
+    group.bench_function("n2000_d16", |b| {
+        b.iter(|| Hdbscan::new().fit_predict(black_box(&data_2k)).unwrap())
+    });
+
     group.finish();
 }
 
@@ -179,6 +184,17 @@ fn bench_cop_kmeans(c: &mut Criterion) {
                 .fit_predict_constrained(black_box(&data), black_box(&constraints))
                 .unwrap()
         })
+    });
+
+    group.finish();
+}
+
+fn bench_optics(c: &mut Criterion) {
+    let mut group = c.benchmark_group("optics");
+
+    let data = synth_data(1000, 16, 42);
+    group.bench_function("n1000_d16", |b| {
+        b.iter(|| clump::Optics::new(1.0, 5).fit(black_box(&data)).unwrap())
     });
 
     group.finish();
@@ -237,6 +253,7 @@ criterion_group!(
     bench_hdbscan,
     bench_minibatch,
     bench_cop_kmeans,
+    bench_optics,
     bench_evoc,
     bench_correlation,
 );
