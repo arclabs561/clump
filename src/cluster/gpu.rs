@@ -70,8 +70,8 @@ pub(crate) struct GpuAssigner {
     label_buf: Buffer,
     param_buf: Buffer, // packed [n, k, d] as 3 x u32
     n: usize,
-    k: usize,
-    d: usize,
+    _k: usize,
+    _d: usize,
     thread_group_size: u64,
 }
 

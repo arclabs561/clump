@@ -61,6 +61,18 @@ fn bench_kmeans(c: &mut Criterion) {
         })
     });
 
+    // Large scale
+    let data_50k = synth_data(50000, 16, 42);
+    group.bench_function("n50000_d16_k100", |b| {
+        b.iter(|| {
+            Kmeans::new(100)
+                .with_max_iter(10)
+                .with_seed(42)
+                .fit_predict(black_box(&data_50k))
+                .unwrap()
+        })
+    });
+
     group.finish();
 }
 
@@ -77,6 +89,25 @@ fn bench_dbscan(c: &mut Criterion) {
         b.iter(|| {
             Dbscan::new(0.5, 5)
                 .fit_predict(black_box(&data_2k))
+                .unwrap()
+        })
+    });
+
+    let data_10k = synth_data(10000, 16, 42);
+    group.bench_function("n10000_d16", |b| {
+        b.iter(|| {
+            Dbscan::new(0.5, 5)
+                .fit_predict(black_box(&data_10k))
+                .unwrap()
+        })
+    });
+
+    // Low-d large-n: grid index should dominate.
+    let data_50k_d3 = synth_data(50000, 3, 42);
+    group.bench_function("n50000_d3", |b| {
+        b.iter(|| {
+            Dbscan::new(0.1, 5)
+                .fit_predict(black_box(&data_50k_d3))
                 .unwrap()
         })
     });
