@@ -102,12 +102,22 @@ fn bench_dbscan(c: &mut Criterion) {
         })
     });
 
-    // Low-d large-n: grid index should dominate.
+    // Low-d large-n: grid index.
     let data_50k_d3 = synth_data(50000, 3, 42);
     group.bench_function("n50000_d3", |b| {
         b.iter(|| {
             Dbscan::new(0.1, 5)
                 .fit_predict(black_box(&data_50k_d3))
+                .unwrap()
+        })
+    });
+
+    // High-d beyond matrix limit: VP-tree path.
+    let data_15k_d16 = synth_data(15000, 16, 42);
+    group.bench_function("n15000_d16", |b| {
+        b.iter(|| {
+            Dbscan::new(0.5, 5)
+                .fit_predict(black_box(&data_15k_d16))
                 .unwrap()
         })
     });

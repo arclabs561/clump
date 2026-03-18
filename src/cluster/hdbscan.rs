@@ -177,7 +177,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
         // For large n (matrix > 512MB), compute distances on-demand to avoid
         // OOM. The on-demand path recomputes each distance ~2x (once for
         // core distances, once for MST) but uses O(n) memory.
-        const MAX_MATRIX_BYTES: usize = 512 * 1024 * 1024;
+        const MAX_MATRIX_BYTES: usize = 1024 * 1024 * 1024;
         let use_matrix = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
 
         let (_core_dists, mst) = if use_matrix {
@@ -188,9 +188,8 @@ impl<D: DistanceMetric> Hdbscan<D> {
             });
             (cd, mst)
         } else {
-            // On-demand: compute core distances row by row without storing
-            // the full matrix.
-            let cd = core_distances_ondemand(data, &self.metric, self.min_samples);
+            // VP-tree: O(n log n) core distance computation via kNN queries.
+            let cd = core_distances_vptree(data, &self.metric, self.min_samples);
             let metric = &self.metric;
             let mst = util::prim_mst(n, |i, j| {
                 let d = metric.distance(&data[i], &data[j]);
@@ -226,45 +225,29 @@ mod validation_tests {
     }
 }
 
-/// Compute core distances on-demand (no precomputed matrix).
-/// Uses O(n) memory per row instead of O(n^2) for the full matrix.
-fn core_distances_ondemand(
+/// Compute core distances using VP-tree kNN queries.
+/// O(n log n) build + O(n * k * log n) queries vs O(n^2) brute force.
+fn core_distances_vptree(
     data: &[Vec<f32>],
     metric: &impl super::distance::DistanceMetric,
     min_samples: usize,
 ) -> Vec<f32> {
     let n = data.len();
     let k = min_samples.min(n - 1).max(1);
+    let tree = super::vptree::VpTree::new(data, metric);
 
-    #[cfg(feature = "parallel")]
-    {
-        use rayon::prelude::*;
-        (0..n)
-            .into_par_iter()
-            .map(|i| {
-                let mut row: Vec<f32> = (0..n)
-                    .filter(|&j| j != i)
-                    .map(|j| metric.distance(&data[i], &data[j]))
-                    .collect();
-                row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
-                row[k - 1]
-            })
-            .collect()
-    }
-
-    #[cfg(not(feature = "parallel"))]
-    {
-        (0..n)
-            .map(|i| {
-                let mut row: Vec<f32> = (0..n)
-                    .filter(|&j| j != i)
-                    .map(|j| metric.distance(&data[i], &data[j]))
-                    .collect();
-                row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
-                row[k - 1]
-            })
-            .collect()
-    }
+    // k+1 because knn includes the query point itself.
+    (0..n)
+        .map(|i| {
+            let neighbors = tree.knn(&data[i], k + 1);
+            // The k-th nearest neighbor (excluding self) is at index k.
+            if neighbors.len() > k {
+                neighbors[k].1
+            } else {
+                neighbors.last().map_or(0.0, |&(_, d)| d)
+            }
+        })
+        .collect()
 }
 
 fn core_distances(dists: &[f32], n: usize, min_samples: usize) -> Vec<f32> {

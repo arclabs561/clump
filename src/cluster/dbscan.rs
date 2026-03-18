@@ -60,6 +60,7 @@
 
 use super::distance::{DistanceMetric, Euclidean};
 use super::util;
+use super::vptree::VpTree;
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 
@@ -256,48 +257,6 @@ impl<D: DistanceMetric> Dbscan<D> {
         }
     }
 
-    /// Find all neighbors within epsilon (on-demand distance computation).
-    fn region_query_ondemand(&self, data: &[Vec<f32>], point_idx: usize) -> Vec<usize> {
-        let point = &data[point_idx];
-        (0..data.len())
-            .filter(|&j| j != point_idx && self.metric.distance(point, &data[j]) <= self.epsilon)
-            .collect()
-    }
-
-    /// Expand cluster from a core point (on-demand distance computation).
-    #[allow(clippy::too_many_arguments)]
-    fn expand_cluster_ondemand(
-        &self,
-        data: &[Vec<f32>],
-        point_idx: usize,
-        neighbors: &[usize],
-        labels: &mut [i32],
-        cluster_id: i32,
-        visited: &mut [bool],
-    ) {
-        labels[point_idx] = cluster_id;
-        let mut to_process: Vec<usize> = neighbors.to_vec();
-
-        while let Some(neighbor_idx) = to_process.pop() {
-            if labels[neighbor_idx] == UNCLASSIFIED || labels[neighbor_idx] == NOISE_LABEL {
-                labels[neighbor_idx] = cluster_id;
-            }
-            if visited[neighbor_idx] {
-                continue;
-            }
-            visited[neighbor_idx] = true;
-
-            let neighbor_neighbors = self.region_query_ondemand(data, neighbor_idx);
-            if neighbor_neighbors.len() + 1 >= self.min_pts {
-                for nn in neighbor_neighbors {
-                    if !visited[nn] {
-                        to_process.push(nn);
-                    }
-                }
-            }
-        }
-    }
-
     /// Find all neighbors within epsilon using precomputed distances.
     fn region_query_precomputed(&self, dists: &[f32], n: usize, point_idx: usize) -> Vec<usize> {
         let row = point_idx * n;
@@ -406,8 +365,10 @@ impl<D: DistanceMetric> Dbscan<D> {
         //    Only effective for low d (d <= 5) where 3^d <= 243 adjacent cells.
         // 3. Brute-force on-demand: O(n) per query, O(1) extra memory.
         //    Fallback for high-d large-n where neither (1) nor (2) helps.
-        const MAX_MATRIX_BYTES: usize = 512 * 1024 * 1024;
+        const MAX_MATRIX_BYTES: usize = 1024 * 1024 * 1024;
         let use_precomputed = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
+        // Grid index: O(3^d) adjacent cells per query. Fast for d<=5 (243 cells).
+        // VP-tree: O(log n) queries, metric-agnostic. Better for moderate d.
         let use_grid = !use_precomputed && d <= 5;
 
         if use_precomputed {
@@ -438,7 +399,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                 cluster_id += 1;
             }
         } else if use_grid {
-            // Low-dimensional large dataset: grid spatial index.
+            // Low-d large dataset: grid spatial index (O(3^d) cells per query).
             let grid = Self::build_grid(data, self.epsilon);
 
             for point_idx in 0..n {
@@ -466,28 +427,48 @@ impl<D: DistanceMetric> Dbscan<D> {
                 cluster_id += 1;
             }
         } else {
-            // High-d large dataset: brute-force on-demand.
+            // Moderate-to-high d, large dataset: VP-tree for O(log n) range queries.
+            // Works for any metric, any dimension. O(n log n) build,
+            // O(log n) amortized per query for well-distributed data.
+            let tree = VpTree::new(data, &self.metric);
+
             for point_idx in 0..n {
                 if visited[point_idx] {
                     continue;
                 }
                 visited[point_idx] = true;
 
-                let neighbors = self.region_query_ondemand(data, point_idx);
+                let mut neighbors = tree.range_query(&data[point_idx], self.epsilon);
+                neighbors.retain(|&j| j != point_idx);
 
                 if neighbors.len() + 1 < self.min_pts {
                     labels[point_idx] = NOISE_LABEL;
                     continue;
                 }
 
-                self.expand_cluster_ondemand(
-                    data,
-                    point_idx,
-                    &neighbors,
-                    &mut labels,
-                    cluster_id,
-                    &mut visited,
-                );
+                // Expand cluster using VP-tree for neighbor queries.
+                labels[point_idx] = cluster_id;
+                let mut to_process = neighbors;
+
+                while let Some(neighbor_idx) = to_process.pop() {
+                    if labels[neighbor_idx] == UNCLASSIFIED || labels[neighbor_idx] == NOISE_LABEL {
+                        labels[neighbor_idx] = cluster_id;
+                    }
+                    if visited[neighbor_idx] {
+                        continue;
+                    }
+                    visited[neighbor_idx] = true;
+
+                    let mut nn = tree.range_query(&data[neighbor_idx], self.epsilon);
+                    nn.retain(|&j| j != neighbor_idx);
+                    if nn.len() + 1 >= self.min_pts {
+                        for idx in nn {
+                            if !visited[idx] {
+                                to_process.push(idx);
+                            }
+                        }
+                    }
+                }
                 cluster_id += 1;
             }
         }
