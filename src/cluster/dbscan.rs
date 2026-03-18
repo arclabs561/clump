@@ -774,4 +774,68 @@ mod tests {
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0], labels[1]); // close in L2
     }
+
+    /// eps=very_large should put everything in one cluster (if min_pts <= n).
+    #[test]
+    fn eps_infinity_one_cluster() {
+        let data = vec![vec![0.0, 0.0], vec![100.0, 100.0], vec![200.0, 200.0]];
+        let labels = Dbscan::new(1000.0, 2).fit_predict(&data).unwrap();
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[1], labels[2]);
+        assert_ne!(labels[0], NOISE);
+    }
+
+    /// min_pts=1 means every point is core: no noise.
+    #[test]
+    fn min_pts_1_no_noise() {
+        let data = vec![vec![0.0, 0.0], vec![100.0, 100.0], vec![200.0, 200.0]];
+        let labels = Dbscan::new(0.01, 1).fit_predict(&data).unwrap();
+        for &l in &labels {
+            assert_ne!(l, NOISE, "min_pts=1 should produce no noise");
+        }
+    }
+
+    /// Points at exactly epsilon distance should be neighbors (inclusive).
+    #[test]
+    fn eps_boundary_inclusive() {
+        // Two points exactly 1.0 apart (Euclidean).
+        let data = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
+        let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+        assert_eq!(
+            labels[0], labels[1],
+            "points at exactly eps should be neighbors"
+        );
+        assert_ne!(labels[0], NOISE);
+    }
+
+    /// Duplicate points must always be in the same cluster.
+    #[test]
+    fn duplicate_points_same_cluster() {
+        let data = vec![
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![10.0, 10.0],
+            vec![10.0, 10.0],
+            vec![10.0, 10.0],
+        ];
+        let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[0], labels[2]);
+        assert_eq!(labels[3], labels[4]);
+        assert_eq!(labels[3], labels[5]);
+    }
+
+    /// Chain of points: density-connectivity is transitive.
+    #[test]
+    fn chain_density_connected() {
+        // Points along x-axis, each 0.3 apart. With eps=0.5, min_pts=2,
+        // each is within eps of its neighbor -> one connected chain.
+        let data: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32 * 0.3, 0.0]).collect();
+        let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+        let first = labels[0];
+        for (i, &l) in labels.iter().enumerate() {
+            assert_eq!(l, first, "point {i} should be in same cluster as point 0");
+        }
+    }
 }

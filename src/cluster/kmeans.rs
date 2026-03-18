@@ -482,6 +482,14 @@ impl<D: DistanceMetric> Kmeans<D> {
             }
         }
 
+        // Final consistency pass: reassign all points to nearest centroid
+        // using the final centroids. This ensures labels and centroids are
+        // mutually consistent (the correctness research identified this as
+        // a common source of bugs in k-means implementations).
+        for (i, label) in labels.iter_mut().enumerate() {
+            *label = util::assign_nearest(&data[i], &centroids, &self.metric);
+        }
+
         Ok(KmeansFit {
             centroids,
             labels,
@@ -890,5 +898,102 @@ mod tests {
             "warm-start should converge fast, got {} iters",
             fit2.iters
         );
+    }
+
+    /// Centroids should approximate the mean of assigned points.
+    /// After convergence + final reassignment, centroids may not be exact
+    /// means if boundary points shifted, but should be very close.
+    #[test]
+    fn centroids_approximate_means() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![0.2, 0.0],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+            vec![10.2, 10.0],
+        ];
+        let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+
+        for k in 0..2 {
+            let members: Vec<&Vec<f32>> = data
+                .iter()
+                .zip(fit.labels.iter())
+                .filter(|(_, &l)| l == k)
+                .map(|(p, _)| p)
+                .collect();
+            if members.is_empty() {
+                continue;
+            }
+            let d = members[0].len();
+            for j in 0..d {
+                let mean: f32 = members.iter().map(|p| p[j]).sum::<f32>() / members.len() as f32;
+                assert!(
+                    (fit.centroids[k][j] - mean).abs() < 0.5,
+                    "centroid[{k}][{j}] = {}, expected ~{mean}",
+                    fit.centroids[k][j]
+                );
+            }
+        }
+    }
+
+    /// Predict on training data must match fit labels (consistency).
+    #[test]
+    fn predict_matches_fit_labels() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(42);
+        let data: Vec<Vec<f32>> = (0..100)
+            .map(|_| vec![rng.random::<f32>() * 10.0, rng.random::<f32>() * 10.0])
+            .collect();
+        let fit = Kmeans::new(5).with_seed(42).fit(&data).unwrap();
+
+        // Predict on the same data should give the same labels as fit.
+        let predicted = fit.predict(&data).unwrap();
+        assert_eq!(
+            fit.labels, predicted,
+            "predict on training data must match fit labels"
+        );
+    }
+
+    /// Refit from converged centroids should be a fixed point (idempotent).
+    #[test]
+    fn idempotent_refit() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+            vec![20.0, 20.0],
+            vec![20.1, 20.1],
+        ];
+        let fit1 = Kmeans::new(3).with_seed(42).fit(&data).unwrap();
+        let fit2 = Kmeans::new(3)
+            .with_centroids(fit1.centroids.clone())
+            .fit(&data)
+            .unwrap();
+        assert_eq!(fit1.labels, fit2.labels, "refit should produce same labels");
+    }
+
+    /// Extreme scale: data * 1e-6 should produce same cluster structure.
+    #[test]
+    fn extreme_scale_small() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+        let scaled: Vec<Vec<f32>> = data
+            .iter()
+            .map(|v| v.iter().map(|&x| x * 1e-6).collect())
+            .collect();
+        let labels1 = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
+        let labels2 = Kmeans::new(2).with_seed(42).fit_predict(&scaled).unwrap();
+
+        // Same cluster structure (labels may be permuted).
+        assert_eq!(labels1[0] == labels1[1], labels2[0] == labels2[1]);
+        assert_eq!(labels1[2] == labels1[3], labels2[2] == labels2[3]);
+        assert_ne!(labels1[0], labels1[2]);
+        assert_ne!(labels2[0], labels2[2]);
     }
 }
