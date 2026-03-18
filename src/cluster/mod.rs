@@ -71,6 +71,7 @@ mod hdbscan;
 mod kmeans;
 pub mod streaming;
 mod util;
+mod vptree;
 
 pub use constrained::{Constraint, CopKmeans};
 pub use correlation::{CorrelationClustering, CorrelationResult, SignedEdge};
