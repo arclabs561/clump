@@ -69,6 +69,7 @@ mod evoc;
 pub(crate) mod gpu;
 mod hdbscan;
 mod kmeans;
+mod projindex;
 pub mod streaming;
 mod util;
 mod vptree;

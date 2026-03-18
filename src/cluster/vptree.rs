@@ -30,6 +30,7 @@ pub(crate) struct VpTree<'a, D: DistanceMetric> {
     metric: &'a D,
 }
 
+#[allow(dead_code)]
 impl<'a, D: DistanceMetric> VpTree<'a, D> {
     /// Build a VP-tree from the given data. O(n log n) average.
     pub(crate) fn new(data: &'a [Vec<f32>], metric: &'a D) -> Self {

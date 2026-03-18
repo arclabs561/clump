@@ -59,8 +59,8 @@
 //!   See [`Hdbscan`](super::Hdbscan).
 
 use super::distance::{DistanceMetric, Euclidean};
+use super::projindex::ProjIndex;
 use super::util;
-use super::vptree::VpTree;
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 
@@ -427,10 +427,12 @@ impl<D: DistanceMetric> Dbscan<D> {
                 cluster_id += 1;
             }
         } else {
-            // Moderate-to-high d, large dataset: VP-tree for O(log n) range queries.
-            // Works for any metric, any dimension. O(n log n) build,
-            // O(log n) amortized per query for well-distributed data.
-            let tree = VpTree::new(data, &self.metric);
+            // Moderate-to-high d, large dataset: random projection index.
+            // Projects points onto 12 random unit vectors with sorted arrays.
+            // By Cauchy-Schwarz, each projection is a valid filter for range
+            // queries. O(n * k) build, O(k * log n + candidates * d) per query.
+            // More effective than VP-tree in d > 10 (avoids curse of dimensionality).
+            let proj = ProjIndex::new(data, &self.metric, 12);
 
             for point_idx in 0..n {
                 if visited[point_idx] {
@@ -438,7 +440,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                 }
                 visited[point_idx] = true;
 
-                let mut neighbors = tree.range_query(&data[point_idx], self.epsilon);
+                let mut neighbors = proj.range_query(&data[point_idx], self.epsilon);
                 neighbors.retain(|&j| j != point_idx);
 
                 if neighbors.len() + 1 < self.min_pts {
@@ -446,7 +448,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                     continue;
                 }
 
-                // Expand cluster using VP-tree for neighbor queries.
+                // Expand cluster using projection index for neighbor queries.
                 labels[point_idx] = cluster_id;
                 let mut to_process = neighbors;
 
@@ -459,7 +461,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                     }
                     visited[neighbor_idx] = true;
 
-                    let mut nn = tree.range_query(&data[neighbor_idx], self.epsilon);
+                    let mut nn = proj.range_query(&data[neighbor_idx], self.epsilon);
                     nn.retain(|&j| j != neighbor_idx);
                     if nn.len() + 1 >= self.min_pts {
                         for idx in nn {
