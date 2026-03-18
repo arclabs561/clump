@@ -839,3 +839,46 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_data(max_n: usize, d: usize) -> impl Strategy<Value = Vec<Vec<f32>>> {
+        proptest::collection::vec(proptest::collection::vec(-10.0f32..10.0, d..=d), 2..=max_n)
+    }
+
+    proptest! {
+        /// Labels must be valid: either NOISE or in [0, n_clusters).
+        #[test]
+        fn labels_valid(data in arb_data(30, 3)) {
+            let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+            prop_assert_eq!(labels.len(), data.len());
+            let max_cluster = labels.iter().copied().filter(|&l| l != NOISE).max();
+            if let Some(max) = max_cluster {
+                for &l in &labels {
+                    prop_assert!(l == NOISE || l <= max);
+                }
+            }
+        }
+
+        /// DBSCAN is deterministic (no randomness).
+        #[test]
+        fn deterministic(data in arb_data(20, 2)) {
+            let l1 = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+            let l2 = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+            prop_assert_eq!(&l1, &l2, "DBSCAN must be deterministic");
+        }
+
+        /// Duplicate points must be in the same cluster.
+        #[test]
+        fn duplicates_same_cluster(
+            base in proptest::collection::vec(-10.0f32..10.0, 3..=3),
+        ) {
+            let data = vec![base.clone(), base.clone(), vec![100.0, 100.0, 100.0]];
+            let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+            prop_assert_eq!(labels[0], labels[1], "duplicates must be in same cluster");
+        }
+    }
+}

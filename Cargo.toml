@@ -31,9 +31,18 @@ ndarray = ["dep:ndarray"]
 [dev-dependencies]
 criterion = "0.7"
 proptest = "1.9"
+linfa = "0.8.1"
+linfa-clustering = "0.8.1"
+ndarray = "0.16"
+ndarray-rand = "0.15"
+rand_xoshiro = "0.6"
 
 [[bench]]
 name = "clustering"
+harness = false
+
+[[bench]]
+name = "comparison"
 harness = false
 [package.metadata.docs.rs]
 features = ["parallel"]

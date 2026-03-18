@@ -66,12 +66,44 @@ fn bench_kmeans(c: &mut Criterion) {
 
     // Large scale
     let data_50k = synth_data(50000, 16, 42);
+    group.bench_function("n50000_d16_k10", |b| {
+        b.iter(|| {
+            Kmeans::new(10)
+                .with_max_iter(10)
+                .with_seed(42)
+                .fit_predict(black_box(&data_50k))
+                .unwrap()
+        })
+    });
+
     group.bench_function("n50000_d16_k100", |b| {
         b.iter(|| {
             Kmeans::new(100)
                 .with_max_iter(10)
                 .with_seed(42)
                 .fit_predict(black_box(&data_50k))
+                .unwrap()
+        })
+    });
+
+    let data_100k = synth_data(100000, 16, 42);
+    group.bench_function("n100000_d16_k100", |b| {
+        b.iter(|| {
+            Kmeans::new(100)
+                .with_max_iter(10)
+                .with_seed(42)
+                .fit_predict(black_box(&data_100k))
+                .unwrap()
+        })
+    });
+
+    let data_200k = synth_data(200000, 128, 42);
+    group.bench_function("n200000_d128_k50", |b| {
+        b.iter(|| {
+            Kmeans::new(50)
+                .with_max_iter(5)
+                .with_seed(42)
+                .fit_predict(black_box(&data_200k))
                 .unwrap()
         })
     });
