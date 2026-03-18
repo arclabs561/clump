@@ -508,23 +508,22 @@ pub(crate) fn prim_mst(
     let mut best = vec![f32::INFINITY; n];
     let mut parent = vec![usize::MAX; n];
 
+    // Start with node 0.
     best[0] = 0.0;
+    let mut next_u = 0usize;
 
     for _ in 0..n {
-        let mut u = usize::MAX;
-        let mut best_val = f32::INFINITY;
-        for i in 0..n {
-            if !in_tree[i] && best[i] < best_val {
-                best_val = best[i];
-                u = i;
-            }
-        }
-
-        if u == usize::MAX {
+        let u = next_u;
+        if best[u] == f32::INFINITY && u != 0 {
             break;
         }
         in_tree[u] = true;
 
+        // Fused update + find-next-min: update best[v] from u and
+        // simultaneously track the minimum for the next iteration.
+        // Saves one full O(n) scan per iteration vs separate loops.
+        let mut next_best = f32::INFINITY;
+        next_u = usize::MAX;
         for v in 0..n {
             if in_tree[v] {
                 continue;
@@ -534,6 +533,14 @@ pub(crate) fn prim_mst(
                 best[v] = d;
                 parent[v] = u;
             }
+            if best[v] < next_best {
+                next_best = best[v];
+                next_u = v;
+            }
+        }
+
+        if next_u == usize::MAX {
+            break;
         }
     }
 

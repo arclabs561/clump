@@ -339,15 +339,17 @@ impl CorrelationClustering {
             for item in 0..n_items {
                 let current_cluster = labels[item];
 
-                // Collect candidate clusters: each neighbor's cluster and a
-                // fresh singleton.
+                // Collect unique candidate clusters from neighbors + fresh singleton.
+                // Use a small Vec with manual dedup (cheaper than sort for typical
+                // neighborhood sizes of 5-50).
                 let mut candidates: Vec<usize> = Vec::with_capacity(adj[item].len() + 1);
                 candidates.push(next_singleton);
                 for &(neighbor, _) in &adj[item] {
-                    candidates.push(labels[neighbor]);
+                    let c = labels[neighbor];
+                    if c != current_cluster && !candidates.contains(&c) {
+                        candidates.push(c);
+                    }
                 }
-                candidates.sort_unstable();
-                candidates.dedup();
 
                 // First-improvement: accept the first move that reduces cost.
                 for &candidate in &candidates {
@@ -376,6 +378,8 @@ impl CorrelationClustering {
 /// Compute the change in disagreement cost from moving `item` from `from` to `to`.
 ///
 /// Negative delta means improvement (cost decreases).
+/// Fused: computes delta directly without separate before/after costs.
+#[inline]
 fn move_delta(
     item: usize,
     from: usize,
@@ -386,32 +390,23 @@ fn move_delta(
     let mut delta = 0.0f64;
 
     for &(neighbor, weight) in &adj[item] {
-        let neighbor_cluster = labels[neighbor];
-
-        // Contribution of this edge under current assignment.
-        let cost_before = edge_disagreement(from, neighbor_cluster, weight);
-        // Contribution of this edge if item moves to `to`.
-        let cost_after = edge_disagreement(to, neighbor_cluster, weight);
-
-        delta += cost_after - cost_before;
+        let nc = labels[neighbor];
+        // Before: item is in `from`. After: item is in `to`.
+        // Only edges where nc == from, nc == to, or neither are affected.
+        let w = weight as f64;
+        if nc == from {
+            // Was same cluster (from), now different (to != from).
+            // Positive edge: gains cost |w|. Negative edge: loses cost |w|.
+            delta += w; // w > 0 means cost increases; w < 0 means cost decreases
+        } else if nc == to {
+            // Was different cluster, now same cluster (to).
+            // Positive edge: loses cost |w|. Negative edge: gains cost |w|.
+            delta -= w;
+        }
+        // If nc != from && nc != to, the same/different status doesn't change.
     }
 
     delta
-}
-
-/// Disagreement cost of a single edge given the clusters of its endpoints.
-///
-/// - Positive edge across clusters: cost = |weight|
-/// - Negative edge within cluster: cost = |weight|
-/// - Otherwise: 0
-#[inline]
-fn edge_disagreement(cluster_a: usize, cluster_b: usize, weight: f32) -> f64 {
-    let same = cluster_a == cluster_b;
-    if (weight > 0.0 && !same) || (weight < 0.0 && same) {
-        (weight as f64).abs()
-    } else {
-        0.0
-    }
 }
 
 /// Compute total disagreement cost for a partition.
