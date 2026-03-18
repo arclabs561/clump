@@ -15,6 +15,7 @@ thiserror = "2.0"
 rand = "0.9"
 rayon = { version = "1.10", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+ndarray = { version = "0.16", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.33", optional = true }
@@ -25,6 +26,7 @@ default = []
 parallel = ["dep:rayon"]
 gpu = ["dep:metal", "dep:objc"]
 serde = ["dep:serde"]
+ndarray = ["dep:ndarray"]
 
 [dev-dependencies]
 criterion = "0.7"

@@ -59,6 +59,8 @@
 //! assert_eq!(labels.len(), data.len());
 //! ```
 
+/// Adapters for ndarray and flat-slice input conversion.
+pub mod adapt;
 pub mod constrained;
 pub mod correlation;
 mod dbscan;
@@ -71,6 +73,7 @@ mod hdbscan;
 mod kmeans;
 /// Cluster evaluation metrics (silhouette, Calinski-Harabasz, Davies-Bouldin).
 pub mod metrics;
+mod optics;
 mod projindex;
 pub mod streaming;
 mod util;
@@ -87,4 +90,5 @@ pub use distance::{
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
 pub use hdbscan::{Hdbscan, HdbscanResult};
 pub use kmeans::{Kmeans, KmeansFit};
+pub use optics::{Optics, OpticsResult};
 pub use streaming::MiniBatchKmeans;

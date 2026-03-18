@@ -26,6 +26,6 @@ pub use cluster::{
     ClusterHierarchy, ClusterLayer, ClusterNode, CompositeDistance, Constraint, CopKmeans,
     CorrelationClustering, CorrelationResult, CosineDistance, Dbscan, DenStream, DistanceMetric,
     EVoC, EVoCParams, Euclidean, Hdbscan, HdbscanResult, InnerProductDistance, Kmeans, KmeansFit,
-    MiniBatchKmeans, SignedEdge, SquaredEuclidean, NOISE,
+    MiniBatchKmeans, Optics, OpticsResult, SignedEdge, SquaredEuclidean, NOISE,
 };
 pub use error::{Error, Result};
