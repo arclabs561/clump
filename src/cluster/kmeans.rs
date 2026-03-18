@@ -363,26 +363,8 @@ impl<D: DistanceMetric> Kmeans<D> {
                 }
             }
 
-            // Update step: accumulate points into centroid sums.
-            // Sort-inverse pattern (Flash-KMeans): when parallel, sort indices
-            // by label so per-cluster reductions are contiguous and cache-friendly.
-            #[cfg(feature = "parallel")]
-            {
-                let mut sorted_indices: Vec<usize> = (0..n).collect();
-                sorted_indices.sort_unstable_by_key(|&i| labels[i]);
-
-                // Each cluster's points are now contiguous in sorted_indices.
-                // Accumulate sequentially (still fast due to cache locality).
-                for &i in &sorted_indices {
-                    let k = labels[i];
-                    for j in 0..d {
-                        new_centroids[k][j] += data[i][j];
-                    }
-                    counts[k] += 1;
-                }
-            }
-
-            #[cfg(not(feature = "parallel"))]
+            // Update step: O(n*d) additions -- sequential scan is faster than
+            // parallel for typical sizes since the work per point is tiny.
             for i in 0..n {
                 let k = labels[i];
                 for j in 0..d {

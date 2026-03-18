@@ -173,12 +173,33 @@ impl<D: DistanceMetric> Hdbscan<D> {
 
         util::validate_finite(data)?;
 
-        let dists = util::pairwise_distance_matrix(data, &self.metric);
-        let core_dists = core_distances(&dists, n, self.min_samples);
+        // For moderate n, precompute the full distance matrix (fast lookups).
+        // For large n (matrix > 512MB), compute distances on-demand to avoid
+        // OOM. The on-demand path recomputes each distance ~2x (once for
+        // core distances, once for MST) but uses O(n) memory.
+        const MAX_MATRIX_BYTES: usize = 512 * 1024 * 1024;
+        let use_matrix = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
 
-        let mut mst = util::prim_mst(n, |i, j| {
-            mutual_reachability(dists[i * n + j], core_dists[i], core_dists[j])
-        });
+        let (_core_dists, mst) = if use_matrix {
+            let dists = util::pairwise_distance_matrix(data, &self.metric);
+            let cd = core_distances(&dists, n, self.min_samples);
+            let mst = util::prim_mst(n, |i, j| {
+                mutual_reachability(dists[i * n + j], cd[i], cd[j])
+            });
+            (cd, mst)
+        } else {
+            // On-demand: compute core distances row by row without storing
+            // the full matrix.
+            let cd = core_distances_ondemand(data, &self.metric, self.min_samples);
+            let metric = &self.metric;
+            let mst = util::prim_mst(n, |i, j| {
+                let d = metric.distance(&data[i], &data[j]);
+                mutual_reachability(d, cd[i], cd[j])
+            });
+            (cd, mst)
+        };
+
+        let mut mst = mst;
         mst.sort_by(|a, b| a.2.total_cmp(&b.2));
 
         Ok(extract_clusters(&mst, n, self.min_cluster_size))
@@ -202,6 +223,47 @@ mod validation_tests {
         let data = vec![vec![0.0, 0.0], vec![f32::INFINITY, 1.0], vec![2.0, 2.0]];
         let result = Hdbscan::new().fit_predict(&data);
         assert!(result.is_err());
+    }
+}
+
+/// Compute core distances on-demand (no precomputed matrix).
+/// Uses O(n) memory per row instead of O(n^2) for the full matrix.
+fn core_distances_ondemand(
+    data: &[Vec<f32>],
+    metric: &impl super::distance::DistanceMetric,
+    min_samples: usize,
+) -> Vec<f32> {
+    let n = data.len();
+    let k = min_samples.min(n - 1).max(1);
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row: Vec<f32> = (0..n)
+                    .filter(|&j| j != i)
+                    .map(|j| metric.distance(&data[i], &data[j]))
+                    .collect();
+                row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+                row[k - 1]
+            })
+            .collect()
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        (0..n)
+            .map(|i| {
+                let mut row: Vec<f32> = (0..n)
+                    .filter(|&j| j != i)
+                    .map(|j| metric.distance(&data[i], &data[j]))
+                    .collect();
+                row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+                row[k - 1]
+            })
+            .collect()
     }
 }
 
