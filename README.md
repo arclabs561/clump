@@ -11,10 +11,10 @@ Clustering algorithms for dense `f32` vectors in Rust. No unsafe code.
 | Algorithm | Kind | Discovers k | Noise handling | Input |
 |-----------|------|-------------|----------------|-------|
 | K-means | Centroid | No (k required) | None | `&[Vec<f32>]` |
-| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `StreamingClustering` trait |
+| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `update_batch(&[Vec<f32>])` |
 | DBSCAN | Density | Yes | Labels noise (`NOISE` sentinel) | `&[Vec<f32>]` |
 | HDBSCAN | Density (hierarchical) | Yes | Labels noise | `&[Vec<f32>]` |
-| DenStream | Density (streaming) | Yes | Decays outliers | `StreamingClustering` trait |
+| DenStream | Density (streaming) | Yes | Decays outliers | `update_batch(&[Vec<f32>])` |
 | EVoC | Hierarchical | Yes | Near-duplicate detection | `&[Vec<f32>]` |
 | COP-Kmeans | Constrained centroid | No (k required) | None | `&[Vec<f32>]` + constraints |
 | Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
