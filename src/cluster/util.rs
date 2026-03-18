@@ -98,6 +98,34 @@ pub(crate) fn mean_variance(data: &[Vec<f32>]) -> f64 {
     }
 }
 
+/// Update per-point minimum distances against a new centroid.
+/// Parallelized when n >= 20000 and the `parallel` feature is enabled.
+fn update_min_dists_for_centroid<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    centroid: &[f32],
+    min_dists: &mut [f32],
+    metric: &D,
+) {
+    #[cfg(feature = "parallel")]
+    if data.len() >= 20_000 {
+        use rayon::prelude::*;
+        min_dists.par_iter_mut().enumerate().for_each(|(i, md)| {
+            let d = metric.distance(&data[i], centroid).max(0.0);
+            if d < *md {
+                *md = d;
+            }
+        });
+        return;
+    }
+
+    for (i, md) in min_dists.iter_mut().enumerate() {
+        let d = metric.distance(&data[i], centroid).max(0.0);
+        if d < *md {
+            *md = d;
+        }
+    }
+}
+
 /// Initialize centroids using k-means++ (Arthur & Vassilvitskii, 2007).
 ///
 /// `data` is `&[Vec<f32>]`, `k` is the number of centroids to select.
@@ -123,11 +151,9 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
     let first = rng.random_range(0..n);
     centroids.push(data[first].clone());
 
-    // Update min_dists for the first centroid.
-    for i in 0..n {
-        let d = metric.distance(&data[i], &centroids[0]);
-        min_dists[i] = d.max(0.0);
-    }
+    // Set initial min_dists (all points vs first centroid).
+    // Uses MAX as initial value, so the helper's `if d < *md` always fires.
+    update_min_dists_for_centroid(data, &centroids[0], &mut min_dists, metric);
 
     // Precompute the exponent once. For the common case alpha=2.0,
     // the exponent is 1.0 and powf is a no-op -- use distances directly.
@@ -136,9 +162,6 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
 
     // Remaining centroids: k-means++ selection.
     for _ in 1..k {
-        // Weight = distance^(alpha/2). For SquaredEuclidean with alpha=2,
-        // this gives D(x)^1 = D(x), matching standard behavior since
-        // SquaredEuclidean distances are already squared.
         let total: f32 = if identity_exp {
             min_dists.iter().sum()
         } else {
@@ -148,14 +171,8 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
         if total == 0.0 || !total.is_finite() {
             let idx = rng.random_range(0..n);
             centroids.push(data[idx].clone());
-            // Update min_dists for the new centroid.
             let new_c = centroids.last().unwrap();
-            for i in 0..n {
-                let d = metric.distance(&data[i], new_c).max(0.0);
-                if d < min_dists[i] {
-                    min_dists[i] = d;
-                }
-            }
+            update_min_dists_for_centroid(data, new_c, &mut min_dists, metric);
             continue;
         }
 
@@ -175,12 +192,7 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
 
         // Update min_dists: only check the newly added centroid.
         let new_c = centroids.last().unwrap();
-        for i in 0..n {
-            let d = metric.distance(&data[i], new_c).max(0.0);
-            if d < min_dists[i] {
-                min_dists[i] = d;
-            }
-        }
+        update_min_dists_for_centroid(data, new_c, &mut min_dists, metric);
     }
 
     centroids
