@@ -122,6 +122,7 @@ Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &
 | `gpu` | off | Metal GPU acceleration for k-means assignment (macOS only) |
 | `serde` | off | Serialize/deserialize for `KmeansFit`, `SignedEdge`, `Constraint`, etc. |
 | `ndarray` | off | Conversion helpers between `Array2<f32>` and clump input format |
+| `simd` | off | SIMD-accelerated distance via [innr](https://crates.io/crates/innr) (NEON/AVX2/AVX-512) |
 
 ## License
 

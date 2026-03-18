@@ -41,6 +41,13 @@ impl DistanceMetric for SquaredEuclidean {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
+        // innr's SIMD 3-dot expansion (||a||^2 + ||b||^2 - 2*dot) wins for
+        // d >= 32 where SIMD throughput dominates. For d < 32, the compiler's
+        // auto-vectorization of the direct (a-b)^2 loop is faster.
+        #[cfg(feature = "simd")]
+        if a.len() >= 32 {
+            return innr::l2_distance_squared(a, b);
+        }
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| {
@@ -62,6 +69,10 @@ pub struct Euclidean;
 impl DistanceMetric for Euclidean {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        #[cfg(feature = "simd")]
+        if a.len() >= 32 {
+            return innr::l2_distance(a, b);
+        }
         SquaredEuclidean.distance(a, b).sqrt()
     }
 }
@@ -80,19 +91,25 @@ impl DistanceMetric for CosineDistance {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
-        let mut dot = 0.0f32;
-        let mut norm_a = 0.0f32;
-        let mut norm_b = 0.0f32;
-        for (x, y) in a.iter().zip(b.iter()) {
-            dot += x * y;
-            norm_a += x * x;
-            norm_b += y * y;
+        #[cfg(feature = "simd")]
+        if a.len() >= 16 {
+            return 1.0 - innr::cosine(a, b);
         }
-        let denom = (norm_a * norm_b).sqrt();
-        if denom < f32::EPSILON {
-            return 0.0;
+        {
+            let mut dot = 0.0f32;
+            let mut norm_a = 0.0f32;
+            let mut norm_b = 0.0f32;
+            for (x, y) in a.iter().zip(b.iter()) {
+                dot += x * y;
+                norm_a += x * x;
+                norm_b += y * y;
+            }
+            let denom = (norm_a * norm_b).sqrt();
+            if denom < f32::EPSILON {
+                return 0.0;
+            }
+            1.0 - (dot / denom)
         }
-        1.0 - (dot / denom)
     }
 }
 
@@ -107,6 +124,10 @@ impl DistanceMetric for InnerProductDistance {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
+        #[cfg(feature = "simd")]
+        if a.len() >= 16 {
+            return -innr::dot(a, b);
+        }
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         -dot
     }
