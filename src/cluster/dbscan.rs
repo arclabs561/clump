@@ -306,14 +306,7 @@ impl<D: DistanceMetric> Dbscan<D> {
         let use_precomputed = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
 
         if use_precomputed {
-            let mut dists = vec![0.0f32; n * n];
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    let d_val = self.metric.distance(&data[i], &data[j]);
-                    dists[i * n + j] = d_val;
-                    dists[j * n + i] = d_val;
-                }
-            }
+            let dists = util::pairwise_distance_matrix(data, &self.metric);
 
             for point_idx in 0..n {
                 if visited[point_idx] {

@@ -129,13 +129,21 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
         min_dists[i] = d.max(0.0);
     }
 
+    // Precompute the exponent once. For the common case alpha=2.0,
+    // the exponent is 1.0 and powf is a no-op -- use distances directly.
+    let exp = alpha / 2.0;
+    let identity_exp = (exp - 1.0).abs() < f32::EPSILON;
+
     // Remaining centroids: k-means++ selection.
     for _ in 1..k {
         // Weight = distance^(alpha/2). For SquaredEuclidean with alpha=2,
         // this gives D(x)^1 = D(x), matching standard behavior since
         // SquaredEuclidean distances are already squared.
-        let weights: Vec<f32> = min_dists.iter().map(|&d| d.powf(alpha / 2.0)).collect();
-        let total: f32 = weights.iter().sum();
+        let total: f32 = if identity_exp {
+            min_dists.iter().sum()
+        } else {
+            min_dists.iter().map(|&d| d.powf(exp)).sum()
+        };
 
         if total == 0.0 || !total.is_finite() {
             let idx = rng.random_range(0..n);
@@ -152,9 +160,10 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
         }
 
         let threshold = rng.random::<f32>() * total;
-        let mut cumsum = 0.0;
+        let mut cumsum = 0.0f32;
         let mut selected = 0;
-        for (j, &w) in weights.iter().enumerate() {
+        for (j, &d) in min_dists.iter().enumerate() {
+            let w = if identity_exp { d } else { d.powf(exp) };
             cumsum += w;
             if cumsum >= threshold {
                 selected = j;
@@ -202,6 +211,7 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
 /// assignment cannot change and we skip all k distance computations.
 ///
 /// Returns the number of points whose distances were actually recomputed.
+#[cfg(not(feature = "parallel"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign<D: DistanceMetric>(
     data: &[Vec<f32>],
@@ -353,6 +363,49 @@ pub(crate) fn assign_nearest_sq_euclidean(
         }
     }
     best_cluster
+}
+
+/// Compute pairwise distance matrix for n points. Returns flat n*n row-major vec.
+///
+/// When the `parallel` feature is enabled, rows are computed in parallel
+/// using rayon (O(n^2/p) with p cores).
+pub(crate) fn pairwise_distance_matrix<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    metric: &D,
+) -> Vec<f32> {
+    let n = data.len();
+    let mut dists = vec![0.0f32; n * n];
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        // Compute each row's upper triangle in parallel.
+        let rows: Vec<Vec<(usize, f32)>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                ((i + 1)..n)
+                    .map(|j| (j, metric.distance(&data[i], &data[j])))
+                    .collect()
+            })
+            .collect();
+        for (i, row) in rows.into_iter().enumerate() {
+            for (j, d) in row {
+                dists[i * n + j] = d;
+                dists[j * n + i] = d;
+            }
+        }
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = metric.distance(&data[i], &data[j]);
+            dists[i * n + j] = d;
+            dists[j * n + i] = d;
+        }
+    }
+
+    dists
 }
 
 /// Compute an MST for a dense complete graph using Prim's algorithm.

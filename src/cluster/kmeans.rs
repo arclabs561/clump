@@ -289,7 +289,10 @@ impl<D: DistanceMetric> Kmeans<D> {
         // lower (dist to second-nearest centroid). When upper <= lower,
         // the assignment cannot change and we skip distance computation.
         // O(n) extra memory (Hamerly, SDM 2010).
+        // Only used in the non-parallel path; parallel uses brute-force.
+        #[cfg(not(feature = "parallel"))]
         let mut upper_bounds = vec![f32::MAX; n];
+        #[cfg(not(feature = "parallel"))]
         let mut lower_bounds = vec![0.0f32; n];
         let mut centroid_shifts = vec![0.0f32; self.k];
 
