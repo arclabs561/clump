@@ -211,7 +211,125 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
 /// assignment cannot change and we skip all k distance computations.
 ///
 /// Returns the number of points whose distances were actually recomputed.
-#[cfg(not(feature = "parallel"))]
+/// Parallel Hamerly assignment using rayon. Each point's bounds check
+/// and potential recomputation are independent, so we parallelize over
+/// points. Returns (new_labels, new_upper, new_lower) computed in parallel.
+#[cfg(feature = "parallel")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    labels: &mut [usize],
+    upper: &mut [f32],
+    lower: &mut [f32],
+    centroid_shifts: &[f32],
+    metric: &D,
+    first_iter: bool,
+) {
+    use rayon::prelude::*;
+    let n = data.len();
+    let k = centroids.len();
+
+    if first_iter || k <= 1 {
+        // First iteration: compute all distances in parallel.
+        let results: Vec<(usize, f32, f32)> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut best = f32::MAX;
+                let mut second = f32::MAX;
+                let mut best_k = 0;
+                for (j, c) in centroids.iter().enumerate() {
+                    let d = metric.distance(&data[i], c);
+                    if d < best {
+                        second = best;
+                        best = d;
+                        best_k = j;
+                    } else if d < second {
+                        second = d;
+                    }
+                }
+                (best_k, best, second)
+            })
+            .collect();
+        for (i, (lbl, u, l)) in results.into_iter().enumerate() {
+            labels[i] = lbl;
+            upper[i] = u;
+            lower[i] = l;
+        }
+        return;
+    }
+
+    // Compute max and second-max centroid shifts for bounds update.
+    let max_shift = centroid_shifts.iter().copied().fold(0.0f32, f32::max);
+    let mut max_shift_idx = 0;
+    for (j, &s) in centroid_shifts.iter().enumerate() {
+        if s >= max_shift {
+            max_shift_idx = j;
+        }
+    }
+    let mut second_max_shift = 0.0f32;
+    for (j, &s) in centroid_shifts.iter().enumerate() {
+        if j != max_shift_idx && s > second_max_shift {
+            second_max_shift = s;
+        }
+    }
+
+    // Parallel bounds check and recompute.
+    // Each element is (label, upper, lower) -- independent per point.
+    let updates: Vec<(usize, f32, f32)> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let old_label = labels[i];
+            let mut u = upper[i] + centroid_shifts[old_label];
+            let relevant_max = if old_label == max_shift_idx {
+                second_max_shift
+            } else {
+                max_shift
+            };
+            let l = lower[i] - relevant_max;
+
+            if u <= l {
+                return (old_label, u, l);
+            }
+
+            // Tighten upper bound.
+            u = metric.distance(&data[i], &centroids[old_label]);
+
+            if u <= l {
+                return (old_label, u, l);
+            }
+
+            // Full recompute.
+            let mut best = u;
+            let mut second = f32::MAX;
+            let mut best_k = old_label;
+            for (j, c) in centroids.iter().enumerate() {
+                if j == old_label {
+                    if best < second {
+                        second = best;
+                    }
+                    continue;
+                }
+                let d = metric.distance(&data[i], c);
+                if d < best {
+                    second = best;
+                    best = d;
+                    best_k = j;
+                } else if d < second {
+                    second = d;
+                }
+            }
+            (best_k, best, second)
+        })
+        .collect();
+
+    for (i, (lbl, u, l)) in updates.into_iter().enumerate() {
+        labels[i] = lbl;
+        upper[i] = u;
+        lower[i] = l;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign<D: DistanceMetric>(
     data: &[Vec<f32>],
@@ -317,52 +435,6 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
     }
 
     recomputed
-}
-
-/// Compute squared L2 norms for all points: `||x||^2`.
-#[cfg(feature = "parallel")]
-pub(crate) fn precompute_sq_norms(data: &[Vec<f32>]) -> Vec<f32> {
-    data.iter()
-        .map(|p| p.iter().map(|&x| x * x).sum())
-        .collect()
-}
-
-/// Compute squared L2 norms for centroids.
-#[cfg(feature = "parallel")]
-pub(crate) fn centroid_sq_norms(centroids: &[Vec<f32>]) -> Vec<f32> {
-    centroids
-        .iter()
-        .map(|c| c.iter().map(|&x| x * x).sum())
-        .collect()
-}
-
-/// Assign a point to the nearest centroid using the expanded squared Euclidean
-/// identity: `||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c`.
-///
-/// Avoids redundant per-element subtraction and squaring by reducing distance
-/// to a dot product plus two norm lookups (Flash-KMeans pattern).
-#[cfg(feature = "parallel")]
-pub(crate) fn assign_nearest_sq_euclidean(
-    point: &[f32],
-    point_sq_norm: f32,
-    centroids: &[Vec<f32>],
-    centroid_sq_norms: &[f32],
-) -> usize {
-    let mut best_cluster = 0;
-    let mut best_dist = f32::MAX;
-    for (k, centroid) in centroids.iter().enumerate() {
-        let dot: f32 = point
-            .iter()
-            .zip(centroid.iter())
-            .map(|(&a, &b)| a * b)
-            .sum();
-        let dist = point_sq_norm + centroid_sq_norms[k] - 2.0 * dot;
-        if dist < best_dist {
-            best_dist = dist;
-            best_cluster = k;
-        }
-    }
-    best_cluster
 }
 
 /// Compute pairwise distance matrix for n points. Returns flat n*n row-major vec.

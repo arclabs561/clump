@@ -67,8 +67,6 @@ use super::distance::{DistanceMetric, SquaredEuclidean};
 use super::util;
 use crate::error::{Error, Result};
 use rand::prelude::*;
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 
 /// K-means clustering algorithm, generic over a distance metric.
 ///
@@ -289,25 +287,12 @@ impl<D: DistanceMetric> Kmeans<D> {
         // lower (dist to second-nearest centroid). When upper <= lower,
         // the assignment cannot change and we skip distance computation.
         // O(n) extra memory (Hamerly, SDM 2010).
-        // Only used in the non-parallel path; parallel uses brute-force.
-        #[cfg(not(feature = "parallel"))]
         let mut upper_bounds = vec![f32::MAX; n];
-        #[cfg(not(feature = "parallel"))]
         let mut lower_bounds = vec![0.0f32; n];
         let mut centroid_shifts = vec![0.0f32; self.k];
 
-        // Expanded squared Euclidean (||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c)
-        // used only in the parallel path where Hamerly bounds aren't available.
-        #[cfg(feature = "parallel")]
-        let use_expanded = self.metric.supports_expanded_form() && d >= 64;
-        #[cfg(feature = "parallel")]
-        let point_sq_norms = if use_expanded {
-            util::precompute_sq_norms(data)
-        } else {
-            Vec::new()
-        };
-        #[cfg(feature = "parallel")]
-        let mut c_sq_norms = Vec::new();
+        // (Expanded squared Euclidean removed -- Hamerly bounds are used
+        // for both parallel and sequential paths.)
 
         // GPU acceleration: initialize Metal compute pipeline for assignment
         // when using SquaredEuclidean and problem is large enough to amortize
@@ -331,12 +316,6 @@ impl<D: DistanceMetric> Kmeans<D> {
             }
             counts.fill(0);
 
-            // Recompute centroid norms each iteration (parallel path only).
-            #[cfg(feature = "parallel")]
-            if use_expanded {
-                c_sq_norms = util::centroid_sq_norms(&centroids);
-            }
-
             // Assignment step.
             // Priority: GPU > parallel CPU > expanded CPU > generic CPU.
             #[cfg(feature = "gpu")]
@@ -354,7 +333,21 @@ impl<D: DistanceMetric> Kmeans<D> {
             if !gpu_used {
                 // Hamerly bounds-based assignment: skips distance computation
                 // for points whose assignment provably cannot change.
-                // Falls back to brute-force on first iteration.
+                // Parallel-safe: each point's bounds are independent.
+                #[cfg(feature = "parallel")]
+                {
+                    util::hamerly_assign_parallel(
+                        data,
+                        &centroids,
+                        &mut labels,
+                        &mut upper_bounds,
+                        &mut lower_bounds,
+                        &centroid_shifts,
+                        &self.metric,
+                        iter == 0,
+                    );
+                }
+
                 #[cfg(not(feature = "parallel"))]
                 {
                     util::hamerly_assign(
@@ -367,31 +360,6 @@ impl<D: DistanceMetric> Kmeans<D> {
                         &self.metric,
                         iter == 0,
                     );
-                }
-
-                #[cfg(feature = "parallel")]
-                {
-                    // Parallel path: Hamerly bounds are per-point state that
-                    // requires sequential update. Use brute-force parallel
-                    // assignment instead.
-                    let centroids_ref = &centroids;
-                    let metric = &self.metric;
-                    if use_expanded {
-                        let psn = &point_sq_norms;
-                        let csn = &c_sq_norms;
-                        labels.par_iter_mut().enumerate().for_each(|(i, label)| {
-                            *label = util::assign_nearest_sq_euclidean(
-                                &data[i],
-                                psn[i],
-                                centroids_ref,
-                                csn,
-                            );
-                        });
-                    } else {
-                        labels.par_iter_mut().enumerate().for_each(|(i, label)| {
-                            *label = util::assign_nearest(&data[i], centroids_ref, metric);
-                        });
-                    }
                 }
             }
 

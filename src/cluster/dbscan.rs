@@ -61,6 +61,7 @@
 use super::distance::{DistanceMetric, Euclidean};
 use super::util;
 use crate::error::{Error, Result};
+use std::collections::HashMap;
 
 /// DBSCAN clustering algorithm, generic over a distance metric.
 ///
@@ -153,6 +154,106 @@ impl<D: DistanceMetric> Dbscan<D> {
     /// Check whether a label is the DBSCAN noise sentinel.
     pub fn is_noise(label: usize) -> bool {
         label == NOISE
+    }
+
+    /// Build a grid-based spatial index with cell size = epsilon.
+    /// Points in the same or adjacent cells are neighbor candidates.
+    /// Reduces region_query from O(n) to O(neighbors) amortized for
+    /// well-distributed data.
+    fn build_grid(data: &[Vec<f32>], epsilon: f32) -> HashMap<Vec<i64>, Vec<usize>> {
+        let cell_size = epsilon;
+        let mut grid: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
+        for (i, point) in data.iter().enumerate() {
+            let cell: Vec<i64> = point
+                .iter()
+                .map(|&x| (x / cell_size).floor() as i64)
+                .collect();
+            grid.entry(cell).or_default().push(i);
+        }
+        grid
+    }
+
+    /// Region query using the grid index. Only checks points in adjacent cells.
+    fn region_query_grid(
+        &self,
+        data: &[Vec<f32>],
+        point_idx: usize,
+        grid: &HashMap<Vec<i64>, Vec<usize>>,
+    ) -> Vec<usize> {
+        let point = &data[point_idx];
+        let d = point.len();
+        let cell_size = self.epsilon;
+        let center_cell: Vec<i64> = point
+            .iter()
+            .map(|&x| (x / cell_size).floor() as i64)
+            .collect();
+
+        // For d dimensions, iterate over all 3^d adjacent cells.
+        // For high d this explodes (3^d cells), so cap at d <= 8.
+        let mut neighbors = Vec::new();
+
+        if d > 8 {
+            // Fall back to brute force for high-d.
+            for (j, other) in data.iter().enumerate() {
+                if j != point_idx && self.metric.distance(point, other) <= self.epsilon {
+                    neighbors.push(j);
+                }
+            }
+            return neighbors;
+        }
+
+        let n_adjacent = 3i64.pow(d as u32);
+        for offset_idx in 0..n_adjacent {
+            let mut cell = center_cell.clone();
+            let mut idx = offset_idx;
+            for c in cell.iter_mut().take(d) {
+                *c += (idx % 3) - 1;
+                idx /= 3;
+            }
+            if let Some(points) = grid.get(&cell) {
+                for &j in points {
+                    if j != point_idx && self.metric.distance(point, &data[j]) <= self.epsilon {
+                        neighbors.push(j);
+                    }
+                }
+            }
+        }
+        neighbors
+    }
+
+    /// Expand cluster using grid-based neighbor lookup.
+    #[allow(clippy::too_many_arguments)]
+    fn expand_cluster_grid(
+        &self,
+        data: &[Vec<f32>],
+        point_idx: usize,
+        neighbors: &[usize],
+        labels: &mut [i32],
+        cluster_id: i32,
+        visited: &mut [bool],
+        grid: &HashMap<Vec<i64>, Vec<usize>>,
+    ) {
+        labels[point_idx] = cluster_id;
+        let mut to_process: Vec<usize> = neighbors.to_vec();
+
+        while let Some(neighbor_idx) = to_process.pop() {
+            if labels[neighbor_idx] == UNCLASSIFIED || labels[neighbor_idx] == NOISE_LABEL {
+                labels[neighbor_idx] = cluster_id;
+            }
+            if visited[neighbor_idx] {
+                continue;
+            }
+            visited[neighbor_idx] = true;
+
+            let neighbor_neighbors = self.region_query_grid(data, neighbor_idx, grid);
+            if neighbor_neighbors.len() + 1 >= self.min_pts {
+                for nn in neighbor_neighbors {
+                    if !visited[nn] {
+                        to_process.push(nn);
+                    }
+                }
+            }
+        }
     }
 
     /// Find all neighbors within epsilon (on-demand distance computation).
@@ -298,12 +399,16 @@ impl<D: DistanceMetric> Dbscan<D> {
         let mut visited = vec![false; n];
         let mut cluster_id: i32 = 0;
 
-        // Precompute pairwise distance matrix when it fits in memory
-        // (n^2 * 4 bytes). Cap at ~256MB to avoid OOM on large datasets.
-        // For n <= ~8000 this is always safe; beyond that, fall back to
-        // on-demand distance computation.
-        const MAX_MATRIX_BYTES: usize = 256 * 1024 * 1024;
+        // Strategy selection for neighbor queries:
+        // 1. Precomputed pairwise matrix: O(1) lookups, O(n^2) memory.
+        //    Used when n^2 * 4 <= 512MB (~n <= 11,500).
+        // 2. Grid spatial index: O(neighbors) amortized, O(n) memory.
+        //    Only effective for low d (d <= 5) where 3^d <= 243 adjacent cells.
+        // 3. Brute-force on-demand: O(n) per query, O(1) extra memory.
+        //    Fallback for high-d large-n where neither (1) nor (2) helps.
+        const MAX_MATRIX_BYTES: usize = 512 * 1024 * 1024;
         let use_precomputed = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
+        let use_grid = !use_precomputed && d <= 5;
 
         if use_precomputed {
             let dists = util::pairwise_distance_matrix(data, &self.metric);
@@ -332,8 +437,36 @@ impl<D: DistanceMetric> Dbscan<D> {
                 );
                 cluster_id += 1;
             }
+        } else if use_grid {
+            // Low-dimensional large dataset: grid spatial index.
+            let grid = Self::build_grid(data, self.epsilon);
+
+            for point_idx in 0..n {
+                if visited[point_idx] {
+                    continue;
+                }
+                visited[point_idx] = true;
+
+                let neighbors = self.region_query_grid(data, point_idx, &grid);
+
+                if neighbors.len() + 1 < self.min_pts {
+                    labels[point_idx] = NOISE_LABEL;
+                    continue;
+                }
+
+                self.expand_cluster_grid(
+                    data,
+                    point_idx,
+                    &neighbors,
+                    &mut labels,
+                    cluster_id,
+                    &mut visited,
+                    &grid,
+                );
+                cluster_id += 1;
+            }
         } else {
-            // Large dataset: compute distances on demand.
+            // High-d large dataset: brute-force on-demand.
             for point_idx in 0..n {
                 if visited[point_idx] {
                     continue;
