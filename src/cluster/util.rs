@@ -52,13 +52,14 @@ use rand::prelude::*;
 /// Every `fit_predict` entry point should call this before doing any computation.
 /// A single non-finite value poisons all distance calculations silently.
 pub(crate) fn validate_finite(data: &[Vec<f32>]) -> Result<()> {
-    for point in data {
-        for &val in point {
+    for (i, point) in data.iter().enumerate() {
+        for (j, &val) in point.iter().enumerate() {
             if !val.is_finite() {
-                return Err(Error::InvalidParameter {
-                    name: "data",
-                    message: "contains NaN or infinity",
-                });
+                // Leak-free: use a static message since Error::InvalidParameter
+                // takes &'static str. The index info goes through Other.
+                return Err(Error::Other(format!(
+                    "data[{i}][{j}] is not finite (NaN or infinity)"
+                )));
             }
         }
     }

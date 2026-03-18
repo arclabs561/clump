@@ -31,6 +31,7 @@ use std::collections::HashMap;
 ///
 /// The default metric is [`SquaredEuclidean`], matching the original behavior.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EVoCParams<D: DistanceMetric = SquaredEuclidean> {
     /// Intermediate dimension used during the projection step.
     ///

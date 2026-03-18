@@ -106,6 +106,7 @@ pub struct Kmeans<D: DistanceMetric = SquaredEuclidean> {
 
 /// Result of fitting k-means, generic over a distance metric.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KmeansFit<D: DistanceMetric = SquaredEuclidean> {
     /// Learned centroids (k x d).
     pub centroids: Vec<Vec<f32>>,

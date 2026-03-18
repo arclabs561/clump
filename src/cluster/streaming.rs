@@ -271,6 +271,24 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
         Ok(labels)
     }
 
+    /// Predict cluster labels for new points without modifying centroids.
+    ///
+    /// Read-only inference: assigns each point to its nearest centroid
+    /// but does not update centroid positions or counts.
+    pub fn predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+        if !self.initialized {
+            return Err(Error::InvalidParameter {
+                name: "state",
+                message: "must call update_batch first to initialize centroids",
+            });
+        }
+        if data.is_empty() {
+            return Err(Error::EmptyInput);
+        }
+        self.validate_dimension(&data[0])?;
+        Ok(data.iter().map(|p| self.assign(p)).collect())
+    }
+
     /// Get current cluster centroids.
     pub fn centroids(&self) -> &[Vec<f32>] {
         &self.centroids_vec

@@ -119,6 +119,7 @@ Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &
 |---------|---------|--------|
 | `parallel` | off | Enables Rayon parallelism for k-means and batch operations |
 | `gpu` | off | Metal GPU acceleration for k-means assignment (macOS only) |
+| `serde` | off | Serialize/deserialize for `KmeansFit`, `SignedEdge`, `Constraint`, etc. |
 
 ## License
 
