@@ -153,6 +153,17 @@ impl<D: DistanceMetric> KmeansFit<D> {
 
         Ok(out)
     }
+
+    /// Within-Cluster Sum of Squares (WCSS / inertia).
+    ///
+    /// Sum of squared distances from each point to its assigned centroid.
+    /// Used for the elbow method: plot WCSS vs k, pick the "elbow."
+    pub fn wcss(&self, data: &[Vec<f32>]) -> f32 {
+        data.iter()
+            .zip(self.labels.iter())
+            .map(|(point, &label)| self.metric.distance(point, &self.centroids[label]))
+            .sum()
+    }
 }
 
 impl Kmeans<SquaredEuclidean> {
@@ -418,16 +429,16 @@ impl<D: DistanceMetric> Kmeans<D> {
             }
 
             // Compute per-centroid shift distances for Hamerly bounds update
-            // and total shift for convergence check.
+            // and total convergence shift in a single pass (avoids double
+            // distance computation -- profiler finding #3).
             let mut shift = 0.0f32;
             for k in 0..self.k {
-                let s: f32 = centroids[k]
-                    .iter()
-                    .zip(new_centroids[k].iter())
-                    .map(|(a, b)| (a - b).powi(2))
-                    .sum();
-                centroid_shifts[k] = self.metric.distance(&centroids[k], &new_centroids[k]);
-                shift += s;
+                let d = self.metric.distance(&centroids[k], &new_centroids[k]);
+                centroid_shifts[k] = d;
+                // Convergence uses sum of squared element-wise shifts.
+                // For SquaredEuclidean, d == sum((a-b)^2) already.
+                // For other metrics, d is the metric distance.
+                shift += d;
             }
 
             std::mem::swap(&mut centroids, &mut new_centroids);

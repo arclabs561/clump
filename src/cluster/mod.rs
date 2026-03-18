@@ -69,6 +69,8 @@ mod evoc;
 pub(crate) mod gpu;
 mod hdbscan;
 mod kmeans;
+/// Cluster evaluation metrics (silhouette, Calinski-Harabasz, Davies-Bouldin).
+pub mod metrics;
 mod projindex;
 pub mod streaming;
 mod util;
