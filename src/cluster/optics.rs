@@ -371,3 +371,52 @@ mod tests {
         assert!(seen.iter().all(|&s| s), "not all points visited");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_data(max_n: usize, d: usize) -> impl Strategy<Value = Vec<Vec<f32>>> {
+        proptest::collection::vec(proptest::collection::vec(-10.0f32..10.0, d..=d), 3..=max_n)
+    }
+
+    proptest! {
+        /// Ordering must be a permutation of 0..n.
+        #[test]
+        fn ordering_is_permutation(data in arb_data(20, 2)) {
+            let result = Optics::new(100.0, 2).fit(&data).unwrap();
+            let n = data.len();
+            prop_assert_eq!(result.ordering.len(), n);
+            let mut sorted = result.ordering.clone();
+            sorted.sort();
+            let expected: Vec<usize> = (0..n).collect();
+            prop_assert_eq!(sorted, expected, "ordering must be a permutation");
+        }
+
+        /// Reachability and core_distances arrays must match ordering length.
+        #[test]
+        fn arrays_aligned(data in arb_data(15, 2)) {
+            let result = Optics::new(50.0, 2).fit(&data).unwrap();
+            prop_assert_eq!(result.reachability.len(), result.ordering.len());
+            prop_assert_eq!(result.core_distances.len(), result.ordering.len());
+        }
+
+        /// Extracted at smaller epsilon: non-noise cluster count should not
+        /// be strictly less unless some points become noise at smaller eps.
+        /// Weaker property: n_clustered_points(small_eps) <= n_clustered_points(big_eps).
+        #[test]
+        fn smaller_eps_fewer_clustered_points(data in arb_data(20, 2)) {
+            let result = Optics::new(100.0, 2).fit(&data).unwrap();
+            let labels_big = Optics::<Euclidean>::extract_clusters(&result, 10.0);
+            let labels_small = Optics::<Euclidean>::extract_clusters(&result, 1.0);
+            let clustered_big = labels_big.iter().filter(|&&l| l != crate::NOISE).count();
+            let clustered_small = labels_small.iter().filter(|&&l| l != crate::NOISE).count();
+            prop_assert!(
+                clustered_small <= clustered_big,
+                "smaller eps should cluster <= points: {} > {}",
+                clustered_small, clustered_big
+            );
+        }
+    }
+}

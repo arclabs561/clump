@@ -997,3 +997,51 @@ mod tests {
         assert_ne!(labels2[0], labels2[2]);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_data(max_n: usize, d: usize) -> impl Strategy<Value = Vec<Vec<f32>>> {
+        proptest::collection::vec(
+            proptest::collection::vec(-100.0f32..100.0, d..=d),
+            3..=max_n,
+        )
+    }
+
+    proptest! {
+        /// All labels must be in [0, k).
+        #[test]
+        fn labels_in_range(data in arb_data(50, 4)) {
+            let k = 3.min(data.len());
+            let labels = Kmeans::new(k).with_seed(42).with_max_iter(5)
+                .fit_predict(&data).unwrap();
+            prop_assert_eq!(labels.len(), data.len());
+            for &l in &labels {
+                prop_assert!(l < k, "label {} out of range [0, {})", l, k);
+            }
+        }
+
+        /// predict on training data must match fit labels.
+        #[test]
+        fn predict_consistent(data in arb_data(30, 3)) {
+            let k = 2.min(data.len());
+            let fit = Kmeans::new(k).with_seed(42).with_max_iter(5)
+                .fit(&data).unwrap();
+            let predicted = fit.predict(&data).unwrap();
+            prop_assert_eq!(&fit.labels, &predicted);
+        }
+
+        /// WCSS must be non-negative and finite.
+        #[test]
+        fn wcss_nonneg(data in arb_data(30, 3)) {
+            let k = 2.min(data.len());
+            let fit = Kmeans::new(k).with_seed(42).with_max_iter(5)
+                .fit(&data).unwrap();
+            let wcss = fit.wcss(&data);
+            prop_assert!(wcss >= 0.0, "WCSS must be >= 0, got {}", wcss);
+            prop_assert!(wcss.is_finite(), "WCSS must be finite");
+        }
+    }
+}
