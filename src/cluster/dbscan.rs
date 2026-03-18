@@ -112,7 +112,12 @@ impl Dbscan<Euclidean> {
     ///
     /// - `epsilon`: Often determined by k-distance plot (k = min_pts - 1).
     /// - `min_pts`: 2 * dimension is a common heuristic. Minimum is 3.
+    /// # Panics
+    ///
+    /// Panics if `epsilon <= 0.0` or `min_pts == 0`.
     pub fn new(epsilon: f32, min_pts: usize) -> Self {
+        assert!(epsilon > 0.0, "epsilon must be positive");
+        assert!(min_pts > 0, "min_pts must be at least 1");
         Self {
             epsilon,
             min_pts,
@@ -123,7 +128,13 @@ impl Dbscan<Euclidean> {
 
 impl<D: DistanceMetric> Dbscan<D> {
     /// Create a new DBSCAN clusterer with a custom distance metric.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `epsilon <= 0.0` or `min_pts == 0`.
     pub fn with_metric(epsilon: f32, min_pts: usize, metric: D) -> Self {
+        assert!(epsilon > 0.0, "epsilon must be positive");
+        assert!(min_pts > 0, "min_pts must be at least 1");
         Self {
             epsilon,
             min_pts,
@@ -318,20 +329,6 @@ impl<D: DistanceMetric> Dbscan<D> {
         let n = data.len();
         if n == 0 {
             return Err(Error::EmptyInput);
-        }
-
-        if self.epsilon <= 0.0 {
-            return Err(Error::InvalidParameter {
-                name: "epsilon",
-                message: "must be positive",
-            });
-        }
-
-        if self.min_pts == 0 {
-            return Err(Error::InvalidParameter {
-                name: "min_pts",
-                message: "must be at least 1",
-            });
         }
 
         // Validate dimensionality.
@@ -641,19 +638,21 @@ mod tests {
     }
 
     #[test]
-    fn test_dbscan_invalid_params() {
-        let data = vec![vec![0.0, 0.0]];
+    #[should_panic(expected = "epsilon must be positive")]
+    fn invalid_epsilon_zero() {
+        Dbscan::new(0.0, 3);
+    }
 
-        // Invalid epsilon
-        let dbscan = Dbscan::new(0.0, 3);
-        assert!(dbscan.fit_predict(&data).is_err());
+    #[test]
+    #[should_panic(expected = "epsilon must be positive")]
+    fn invalid_epsilon_negative() {
+        Dbscan::new(-1.0, 3);
+    }
 
-        let dbscan = Dbscan::new(-1.0, 3);
-        assert!(dbscan.fit_predict(&data).is_err());
-
-        // Invalid min_pts
-        let dbscan = Dbscan::new(0.5, 0);
-        assert!(dbscan.fit_predict(&data).is_err());
+    #[test]
+    #[should_panic(expected = "min_pts must be at least 1")]
+    fn invalid_min_pts_zero() {
+        Dbscan::new(0.5, 0);
     }
 
     #[test]

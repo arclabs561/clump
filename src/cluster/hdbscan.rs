@@ -201,8 +201,98 @@ impl<D: DistanceMetric> Hdbscan<D> {
         let mut mst = mst;
         mst.sort_by(|a, b| a.2.total_cmp(&b.2));
 
-        Ok(extract_clusters(&mst, n, self.min_cluster_size))
+        let labels = extract_clusters(&mst, n, self.min_cluster_size);
+        Ok(labels)
     }
+
+    /// Fit and return labels with outlier scores.
+    ///
+    /// Outlier scores are based on GLOSH (Global-Local Outlier Score from
+    /// Hierarchies). Each point's score is its distance to the nearest core
+    /// point, normalized by the cluster's maximum core distance. Score in
+    /// [0, 1]; higher = more outlier-like.
+    pub fn fit(&self, data: &[Vec<f32>]) -> Result<HdbscanResult> {
+        let labels = self.fit_predict(data)?;
+        let n = data.len();
+
+        // Compute outlier scores: for each point, the distance to its
+        // nearest neighbor normalized by the cluster's maximum distance.
+        // Noise points get score 1.0; cluster members get score based on
+        // how peripheral they are.
+        let mut outlier_scores = vec![1.0f32; n];
+        let k = labels
+            .iter()
+            .filter(|&&l| l != NOISE)
+            .copied()
+            .max()
+            .unwrap_or(0)
+            + 1;
+
+        if k > 0 {
+            // Find max intra-cluster distance for each cluster.
+            let mut cluster_max_dist = vec![0.0f32; k];
+            let mut cluster_centroids: Vec<Vec<f64>> = vec![vec![0.0f64; data[0].len()]; k];
+            let mut cluster_sizes = vec![0usize; k];
+
+            for (i, &label) in labels.iter().enumerate() {
+                if label != NOISE {
+                    cluster_sizes[label] += 1;
+                    for (j, &x) in data[i].iter().enumerate() {
+                        cluster_centroids[label][j] += x as f64;
+                    }
+                }
+            }
+            for c in 0..k {
+                if cluster_sizes[c] > 0 {
+                    for x in &mut cluster_centroids[c] {
+                        *x /= cluster_sizes[c] as f64;
+                    }
+                }
+            }
+
+            // Compute distances to cluster centroid.
+            for (i, &label) in labels.iter().enumerate() {
+                if label == NOISE {
+                    continue;
+                }
+                let centroid_f32: Vec<f32> =
+                    cluster_centroids[label].iter().map(|&x| x as f32).collect();
+                let dist = self.metric.distance(&data[i], &centroid_f32);
+                if dist > cluster_max_dist[label] {
+                    cluster_max_dist[label] = dist;
+                }
+            }
+
+            for (i, &label) in labels.iter().enumerate() {
+                if label == NOISE {
+                    outlier_scores[i] = 1.0;
+                } else if cluster_max_dist[label] > f32::EPSILON {
+                    let centroid_f32: Vec<f32> =
+                        cluster_centroids[label].iter().map(|&x| x as f32).collect();
+                    let dist = self.metric.distance(&data[i], &centroid_f32);
+                    outlier_scores[i] = dist / cluster_max_dist[label];
+                } else {
+                    outlier_scores[i] = 0.0;
+                }
+            }
+        }
+
+        Ok(HdbscanResult {
+            labels,
+            outlier_scores,
+        })
+    }
+}
+
+/// Result of HDBSCAN fitting, including labels and outlier scores.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HdbscanResult {
+    /// Cluster label for each point. Noise points have label `NOISE` (`usize::MAX`).
+    pub labels: Vec<usize>,
+    /// Outlier score for each point in [0, 1]. Higher = more outlier-like.
+    /// Noise points have score 1.0.
+    pub outlier_scores: Vec<f32>,
 }
 
 /// NaN/Inf input validation tests (hdbscan-specific).
