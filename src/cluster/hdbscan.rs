@@ -173,7 +173,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
 
         util::validate_finite(data)?;
 
-        let dists = pairwise_distances(data, &self.metric);
+        let dists = util::pairwise_distance_matrix(data, &self.metric);
         let core_dists = core_distances(&dists, n, self.min_samples);
 
         let mut mst = util::prim_mst(n, |i, j| {
@@ -205,31 +205,38 @@ mod validation_tests {
     }
 }
 
-fn pairwise_distances(data: &[Vec<f32>], metric: &impl DistanceMetric) -> Vec<f32> {
-    let n = data.len();
-    let mut dists = vec![0.0f32; n * n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let d = metric.distance(&data[i], &data[j]);
-            dists[i * n + j] = d;
-            dists[j * n + i] = d;
-        }
-    }
-    dists
-}
-
 fn core_distances(dists: &[f32], n: usize, min_samples: usize) -> Vec<f32> {
     let k = min_samples.min(n - 1).max(1);
-    let mut core = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut row: Vec<f32> = (0..n)
-            .filter(|&j| j != i)
-            .map(|j| dists[i * n + j])
-            .collect();
-        row.sort_by(|a, b| a.total_cmp(b));
-        core.push(row[k - 1]);
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row: Vec<f32> = (0..n)
+                    .filter(|&j| j != i)
+                    .map(|j| dists[i * n + j])
+                    .collect();
+                row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+                row[k - 1]
+            })
+            .collect()
     }
-    core
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        let mut core = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut row: Vec<f32> = (0..n)
+                .filter(|&j| j != i)
+                .map(|j| dists[i * n + j])
+                .collect();
+            row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+            core.push(row[k - 1]);
+        }
+        core
+    }
 }
 
 #[inline]

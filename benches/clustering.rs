@@ -72,6 +72,15 @@ fn bench_dbscan(c: &mut Criterion) {
         b.iter(|| Dbscan::new(0.5, 5).fit_predict(black_box(&data)).unwrap())
     });
 
+    let data_2k = synth_data(2000, 16, 42);
+    group.bench_function("n2000_d16", |b| {
+        b.iter(|| {
+            Dbscan::new(0.5, 5)
+                .fit_predict(black_box(&data_2k))
+                .unwrap()
+        })
+    });
+
     group.finish();
 }
 
@@ -81,6 +90,11 @@ fn bench_hdbscan(c: &mut Criterion) {
     let data = synth_data(500, 16, 42);
     group.bench_function("n500_d16", |b| {
         b.iter(|| Hdbscan::new().fit_predict(black_box(&data)).unwrap())
+    });
+
+    let data_1k = synth_data(1000, 16, 42);
+    group.bench_function("n1000_d16", |b| {
+        b.iter(|| Hdbscan::new().fit_predict(black_box(&data_1k)).unwrap())
     });
 
     group.finish();

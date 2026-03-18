@@ -38,7 +38,7 @@ pub trait DistanceMetric: Clone + Send + Sync {
 pub struct SquaredEuclidean;
 
 impl DistanceMetric for SquaredEuclidean {
-    #[inline]
+    #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
         a.iter()
@@ -60,7 +60,7 @@ impl DistanceMetric for SquaredEuclidean {
 pub struct Euclidean;
 
 impl DistanceMetric for Euclidean {
-    #[inline]
+    #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         SquaredEuclidean.distance(a, b).sqrt()
     }
@@ -77,7 +77,7 @@ impl DistanceMetric for CosineDistance {
         true
     }
 
-    #[inline]
+    #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
         let mut dot = 0.0f32;
@@ -104,7 +104,7 @@ impl DistanceMetric for CosineDistance {
 pub struct InnerProductDistance;
 
 impl DistanceMetric for InnerProductDistance {
-    #[inline]
+    #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
