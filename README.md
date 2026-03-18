@@ -17,6 +17,7 @@ Clustering algorithms for dense `f32` vectors in Rust. No unsafe code.
 | DenStream | Density (streaming) | Yes | Decays outliers | `update_batch(&[Vec<f32>])` |
 | EVoC | Hierarchical | Yes | Near-duplicate detection | `&[Vec<f32>]` |
 | COP-Kmeans | Constrained centroid | No (k required) | None | `&[Vec<f32>]` + constraints |
+| OPTICS | Density (reachability) | Yes | Reachability plot | `&[Vec<f32>]` |
 | Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
 
 ## Quickstart
@@ -120,6 +121,7 @@ Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &
 | `parallel` | off | Enables Rayon parallelism for k-means and batch operations |
 | `gpu` | off | Metal GPU acceleration for k-means assignment (macOS only) |
 | `serde` | off | Serialize/deserialize for `KmeansFit`, `SignedEdge`, `Constraint`, etc. |
+| `ndarray` | off | Conversion helpers between `Array2<f32>` and clump input format |
 
 ## License
 
