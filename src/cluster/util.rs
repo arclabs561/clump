@@ -242,16 +242,20 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     use rayon::prelude::*;
     let n = data.len();
     let k = centroids.len();
+    let d = if k > 0 { centroids[0].len() } else { 0 };
+
+    // Flatten centroids for cache-friendly parallel access.
+    let flat_centroids: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
 
     if first_iter || k <= 1 {
-        // First iteration: compute all distances in parallel.
         let results: Vec<(usize, f32, f32)> = (0..n)
             .into_par_iter()
             .map(|i| {
                 let mut best = f32::MAX;
                 let mut second = f32::MAX;
                 let mut best_k = 0;
-                for (j, c) in centroids.iter().enumerate() {
+                for j in 0..k {
+                    let c = &flat_centroids[j * d..(j + 1) * d];
                     let d = metric.distance(&data[i], c);
                     if d < best {
                         second = best;
@@ -305,31 +309,33 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
                 return (old_label, u, l);
             }
 
-            // Tighten upper bound.
-            u = metric.distance(&data[i], &centroids[old_label]);
+            // Tighten upper bound using flat centroids.
+            let old_c = &flat_centroids[old_label * d..(old_label + 1) * d];
+            u = metric.distance(&data[i], old_c);
 
             if u <= l {
                 return (old_label, u, l);
             }
 
-            // Full recompute.
+            // Full recompute using flat centroids.
             let mut best = u;
             let mut second = f32::MAX;
             let mut best_k = old_label;
-            for (j, c) in centroids.iter().enumerate() {
+            for j in 0..k {
                 if j == old_label {
                     if best < second {
                         second = best;
                     }
                     continue;
                 }
-                let d = metric.distance(&data[i], c);
-                if d < best {
+                let c = &flat_centroids[j * d..(j + 1) * d];
+                let dist = metric.distance(&data[i], c);
+                if dist < best {
                     second = best;
-                    best = d;
+                    best = dist;
                     best_k = j;
-                } else if d < second {
-                    second = d;
+                } else if dist < second {
+                    second = dist;
                 }
             }
             (best_k, best, second)
@@ -356,22 +362,41 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
 ) -> usize {
     let n = data.len();
     let k = centroids.len();
+    let d = if k > 0 { centroids[0].len() } else { 0 };
     let mut recomputed = 0;
 
+    // Flatten centroids to contiguous memory for cache-friendly access.
+    // Only worth the copy overhead when k is large enough that cache misses
+    // from Vec<Vec<f32>> pointer chasing dominate.
+    let use_flat = k >= 16;
+    let flat_centroids: Vec<f32> = if use_flat {
+        centroids.iter().flat_map(|c| c.iter().copied()).collect()
+    } else {
+        Vec::new()
+    };
+
+    let batch_dist = |point: &[f32], centroid_idx: usize| -> f32 {
+        if use_flat {
+            let c = &flat_centroids[centroid_idx * d..(centroid_idx + 1) * d];
+            metric.distance(point, c)
+        } else {
+            metric.distance(point, &centroids[centroid_idx])
+        }
+    };
+
     if first_iter || k <= 1 {
-        // First iteration: compute all distances (no bounds yet).
         for i in 0..n {
             let mut best = f32::MAX;
             let mut second = f32::MAX;
             let mut best_k = 0;
-            for (j, c) in centroids.iter().enumerate() {
-                let d = metric.distance(&data[i], c);
-                if d < best {
+            for j in 0..k {
+                let dist = batch_dist(&data[i], j);
+                if dist < best {
                     second = best;
-                    best = d;
+                    best = dist;
                     best_k = j;
-                } else if d < second {
-                    second = d;
+                } else if dist < second {
+                    second = dist;
                 }
             }
             labels[i] = best_k;
@@ -415,31 +440,31 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
         }
 
         // Tighten upper bound by recomputing distance to assigned centroid.
-        upper[i] = metric.distance(&data[i], &centroids[labels[i]]);
+        upper[i] = batch_dist(&data[i], labels[i]);
 
         if upper[i] <= lower[i] {
             continue;
         }
 
-        // Must recompute all distances.
+        // Must recompute all distances using flat centroids.
         recomputed += 1;
         let mut best = upper[i];
         let mut second = f32::MAX;
         let mut best_k = labels[i];
-        for (j, c) in centroids.iter().enumerate() {
+        for j in 0..k {
             if j == labels[i] {
                 if best < second {
                     second = best;
                 }
                 continue;
             }
-            let d = metric.distance(&data[i], c);
-            if d < best {
+            let dist = batch_dist(&data[i], j);
+            if dist < best {
                 second = best;
-                best = d;
+                best = dist;
                 best_k = j;
-            } else if d < second {
-                second = d;
+            } else if dist < second {
+                second = dist;
             }
         }
         labels[i] = best_k;
