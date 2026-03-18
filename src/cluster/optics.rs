@@ -226,7 +226,7 @@ impl<D: DistanceMetric> Optics<D> {
     /// Points with reachability > epsilon start new clusters or become noise.
     pub fn extract_clusters(result: &OpticsResult, epsilon: f32) -> Vec<usize> {
         let n = result.ordering.len();
-        let noise = super::dbscan::NOISE;
+        let noise = crate::NOISE;
         let mut cluster_id = 0usize;
         let mut label_by_orig = vec![noise; n];
 
@@ -294,5 +294,66 @@ mod tests {
     #[should_panic(expected = "max_epsilon must be positive")]
     fn optics_invalid_epsilon() {
         Optics::new(0.0, 2);
+    }
+
+    /// OPTICS extract_clusters at epsilon should produce the same cluster
+    /// structure as DBSCAN at the same epsilon (cross-algorithm consistency).
+    #[test]
+    fn optics_dbscan_consistency() {
+        use crate::Dbscan;
+
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.0, 0.1],
+            vec![0.1, 0.1],
+            vec![0.05, 0.05],
+            vec![10.0, 10.0],
+            vec![10.1, 10.0],
+            vec![10.0, 10.1],
+            vec![10.1, 10.1],
+            vec![10.05, 10.05],
+        ];
+
+        let eps = 0.3;
+        let min_pts = 3;
+
+        let dbscan_labels = Dbscan::new(eps, min_pts).fit_predict(&data).unwrap();
+        let optics_result = Optics::new(eps, min_pts).fit(&data).unwrap();
+        let optics_labels = Optics::<Euclidean>::extract_clusters(&optics_result, eps);
+
+        // Both should find the same cluster structure (same/different relationships).
+        for i in 0..data.len() {
+            for j in (i + 1)..data.len() {
+                let db_same =
+                    dbscan_labels[i] == dbscan_labels[j] && dbscan_labels[i] != crate::NOISE;
+                let op_same =
+                    optics_labels[i] == optics_labels[j] && optics_labels[i] != crate::NOISE;
+                assert_eq!(
+                    db_same, op_same,
+                    "DBSCAN and OPTICS disagree on points {i},{j}: \
+                     DBSCAN labels=({},{}), OPTICS labels=({},{})",
+                    dbscan_labels[i], dbscan_labels[j], optics_labels[i], optics_labels[j]
+                );
+            }
+        }
+    }
+
+    /// Reachability ordering should visit all points exactly once.
+    #[test]
+    fn optics_ordering_complete() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(42);
+        let data: Vec<Vec<f32>> = (0..50)
+            .map(|_| vec![rng.random::<f32>() * 10.0, rng.random::<f32>() * 10.0])
+            .collect();
+        let result = Optics::new(5.0, 3).fit(&data).unwrap();
+        assert_eq!(result.ordering.len(), 50);
+        let mut seen = vec![false; 50];
+        for &idx in &result.ordering {
+            assert!(!seen[idx], "point {idx} visited twice");
+            seen[idx] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "not all points visited");
     }
 }

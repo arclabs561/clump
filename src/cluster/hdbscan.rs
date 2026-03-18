@@ -892,4 +892,57 @@ mod tests {
             labels.iter().copied().filter(|&l| l != NOISE).collect();
         assert!(non_noise.len() >= 2, "should find at least 2 clusters");
     }
+
+    /// Outlier scores should be 1.0 for noise, [0, 1] for cluster members.
+    #[test]
+    fn outlier_scores_range() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.0, 0.1],
+            vec![0.1, 0.1],
+            vec![100.0, 100.0], // outlier
+        ];
+        let result = Hdbscan::new().with_min_samples(2).fit(&data).unwrap();
+        for (i, &score) in result.outlier_scores.iter().enumerate() {
+            assert!(
+                (0.0..=1.0).contains(&score),
+                "outlier score for point {i} should be in [0,1], got {score}"
+            );
+        }
+        // The isolated point should have highest outlier score.
+        let max_score_idx = result
+            .outlier_scores
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(
+            max_score_idx, 4,
+            "isolated point should have highest outlier score"
+        );
+    }
+
+    /// Duplicate points should be in the same cluster.
+    #[test]
+    fn duplicate_points_same_cluster() {
+        let data = vec![
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![10.0, 10.0],
+            vec![10.0, 10.0],
+            vec![10.0, 10.0],
+        ];
+        let labels = Hdbscan::new()
+            .with_min_samples(2)
+            .fit_predict(&data)
+            .unwrap();
+        // Duplicates must be in same cluster.
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[0], labels[2]);
+        assert_eq!(labels[3], labels[4]);
+        assert_eq!(labels[3], labels[5]);
+    }
 }
