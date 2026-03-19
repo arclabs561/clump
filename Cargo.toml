@@ -7,7 +7,7 @@ description = "Dense clustering primitives (k-means, DBSCAN, HDBSCAN, EVoC, COP-
 repository = "https://github.com/arclabs561/clump"
 homepage = "https://github.com/arclabs561/clump"
 documentation = "https://docs.rs/clump"
-keywords = ["clustering", "kmeans", "ml", "algorithms"]
+keywords = ["clustering", "kmeans", "dbscan", "hdbscan", "ml"]
 categories = ["algorithms", "science"]
 
 [dependencies]

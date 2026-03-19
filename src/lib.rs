@@ -1,7 +1,8 @@
 //! Dense clustering primitives.
 //!
-//! `clump` provides clustering algorithms for dense `f32` vectors, generic over
-//! a pluggable distance metric.
+//! 9 clustering algorithms for dense `f32` vectors, generic over pluggable
+//! distance metrics. SIMD-accelerated (innr), with optional GPU (Metal) and
+//! parallel (rayon) support.
 //!
 //! **Batch**: [`Kmeans`], [`Dbscan`], [`Hdbscan`], [`EVoC`], [`CopKmeans`],
 //! [`CorrelationClustering`].
