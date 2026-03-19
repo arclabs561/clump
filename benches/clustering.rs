@@ -97,6 +97,21 @@ fn bench_kmeans(c: &mut Criterion) {
         })
     });
 
+    // High magnitude data (simulates un-normalized embeddings).
+    let data_hm: Vec<Vec<f32>> = synth_data(5000, 128, 42)
+        .into_iter()
+        .map(|v| v.into_iter().map(|x| x * 1000.0).collect())
+        .collect();
+    group.bench_function("n5000_d128_k10_highmag", |b| {
+        b.iter(|| {
+            Kmeans::new(10)
+                .with_max_iter(10)
+                .with_seed(42)
+                .fit_predict(black_box(&data_hm))
+                .unwrap()
+        })
+    });
+
     let data_200k = synth_data(200000, 128, 42);
     group.bench_function("n200000_d128_k50", |b| {
         b.iter(|| {

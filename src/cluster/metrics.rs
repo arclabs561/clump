@@ -26,8 +26,15 @@ pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], 
         return 0.0;
     }
 
-    // Find the number of clusters.
-    let k = labels.iter().copied().max().unwrap_or(0) + 1;
+    // Find the number of clusters (exclude NOISE sentinel = usize::MAX).
+    let noise = super::dbscan::NOISE;
+    let k = labels
+        .iter()
+        .copied()
+        .filter(|&l| l != noise)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
     if k <= 1 {
         return 0.0;
     }
@@ -44,8 +51,12 @@ pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], 
 
     let mut total_silhouette = 0.0f64;
 
+    let mut counted = 0usize;
     for i in 0..n {
         let ci = labels[i];
+        if ci == noise || ci >= k {
+            continue;
+        }
         if cluster_sizes[ci] <= 1 {
             // Singleton cluster: silhouette undefined, treat as 0.
             continue;
@@ -54,7 +65,7 @@ pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], 
         // Accumulate distances from point i to each cluster.
         let mut cluster_dist_sum = vec![0.0f64; k];
         for j in 0..n {
-            if i == j {
+            if i == j || labels[j] == noise || labels[j] >= k {
                 continue;
             }
             let d = metric.distance(&data[i], &data[j]) as f64;
@@ -82,9 +93,13 @@ pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], 
             0.0
         };
         total_silhouette += s;
+        counted += 1;
     }
 
-    (total_silhouette / n as f64) as f32
+    if counted == 0 {
+        return 0.0;
+    }
+    (total_silhouette / counted as f64) as f32
 }
 
 /// Calinski-Harabasz index (variance ratio criterion).
@@ -245,6 +260,94 @@ pub fn silhouette_score_sampled<D: DistanceMetric>(
     silhouette_score(&sampled_data, &sampled_labels, metric)
 }
 
+/// Noise-aware silhouette score for density-based clustering.
+///
+/// Like standard silhouette, but noise points (labeled `NOISE = usize::MAX`)
+/// are excluded from the computation rather than being treated as misclassified.
+/// This gives more meaningful scores for DBSCAN/HDBSCAN results where noise
+/// is an intentional output, not a failure.
+///
+/// Returns 0.0 if all points are noise or only one cluster exists.
+pub fn silhouette_score_noise_aware<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    labels: &[usize],
+    metric: &D,
+) -> f32 {
+    let noise = super::dbscan::NOISE;
+    let n = data.len();
+
+    // Filter to non-noise points.
+    let non_noise_indices: Vec<usize> = (0..n).filter(|&i| labels[i] != noise).collect();
+    if non_noise_indices.len() <= 1 {
+        return 0.0;
+    }
+
+    let max_label = non_noise_indices
+        .iter()
+        .map(|&i| labels[i])
+        .max()
+        .unwrap_or(0);
+    let k = max_label + 1;
+    if k <= 1 {
+        return 0.0;
+    }
+
+    let mut cluster_sizes = vec![0usize; k];
+    for &i in &non_noise_indices {
+        cluster_sizes[labels[i]] += 1;
+    }
+
+    let mut total = 0.0f64;
+
+    for &i in &non_noise_indices {
+        let ci = labels[i];
+        if cluster_sizes[ci] <= 1 {
+            continue;
+        }
+
+        let mut cluster_dist_sum = vec![0.0f64; k];
+        for &j in &non_noise_indices {
+            if i == j {
+                continue;
+            }
+            let d = metric.distance(&data[i], &data[j]) as f64;
+            cluster_dist_sum[labels[j]] += d;
+        }
+
+        let a = cluster_dist_sum[ci] / (cluster_sizes[ci] - 1) as f64;
+
+        let mut b = f64::MAX;
+        for c in 0..k {
+            if c == ci || cluster_sizes[c] == 0 {
+                continue;
+            }
+            let mean_dist = cluster_dist_sum[c] / cluster_sizes[c] as f64;
+            if mean_dist < b {
+                b = mean_dist;
+            }
+        }
+
+        let s = if a.max(b) > 0.0 {
+            (b - a) / a.max(b)
+        } else {
+            0.0
+        };
+        total += s;
+    }
+
+    (total / non_noise_indices.len() as f64) as f32
+}
+
+/// Noise ratio: fraction of points labeled as noise.
+///
+/// Useful as a companion metric for density-based clustering.
+/// Range: [0, 1]. Zero = no noise, 1 = all noise.
+pub fn noise_ratio(labels: &[usize]) -> f32 {
+    let noise = super::dbscan::NOISE;
+    let noise_count = labels.iter().filter(|&&l| l == noise).count();
+    noise_count as f32 / labels.len().max(1) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +412,43 @@ mod tests {
             db < 0.1,
             "well-separated clusters should have low DB, got {db}"
         );
+    }
+
+    #[test]
+    fn silhouette_noise_aware_excludes_noise() {
+        let noise = crate::NOISE;
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![10.0, 0.0],
+            vec![10.1, 0.0],
+            vec![50.0, 50.0], // noise point
+        ];
+        let labels = vec![0, 0, 1, 1, noise];
+
+        let aware = silhouette_score_noise_aware(&data, &labels, &Euclidean);
+
+        // Noise-aware on well-separated clusters should give a high score.
+        assert!(
+            aware > 0.8,
+            "noise-aware should be high for well-separated clusters, got {aware}"
+        );
+    }
+
+    #[test]
+    fn silhouette_noise_aware_all_noise() {
+        let noise = crate::NOISE;
+        let data = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let labels = vec![noise, noise, noise];
+        let score = silhouette_score_noise_aware(&data, &labels, &Euclidean);
+        assert!(score.abs() < 0.01, "all noise should give ~0");
+    }
+
+    #[test]
+    fn noise_ratio_basic() {
+        let noise = crate::NOISE;
+        assert!((noise_ratio(&[0, 1, noise]) - 1.0 / 3.0).abs() < 0.01);
+        assert!((noise_ratio(&[0, 0, 0]) - 0.0).abs() < 0.01);
+        assert!((noise_ratio(&[noise, noise]) - 1.0).abs() < 0.01);
     }
 }
