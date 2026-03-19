@@ -351,6 +351,14 @@ impl<D: DistanceMetric> Kmeans<D> {
             None
         };
 
+        // Flat data and precomputed norms available for future GEMM path.
+        let _flat_data = if n * d >= 10_000 && self.metric.supports_expanded_form() {
+            Some(super::flat::FlatMatrix::from_vecs(data))
+        } else {
+            None
+        };
+        let _x_norms = _flat_data.as_ref().map(|f| f.row_norms_sq());
+
         let mut iters = 0usize;
         for iter in 0..self.max_iter {
             iters = iter + 1;
