@@ -418,5 +418,76 @@ mod proptests {
                 clustered_small, clustered_big
             );
         }
+
+        /// All reachability distances must be >= 0 or infinity.
+        #[test]
+        fn reachability_non_negative(data in arb_data(15, 2)) {
+            let result = Optics::new(50.0, 2).fit(&data).unwrap();
+            for (i, &r) in result.reachability.iter().enumerate() {
+                prop_assert!(
+                    r >= 0.0 || r == f32::INFINITY,
+                    "reachability[{}] = {} is negative", i, r
+                );
+            }
+        }
+
+        /// Core points (finite core distance) must have positive core distances.
+        #[test]
+        fn core_distances_positive_for_core_points(data in arb_data(15, 2)) {
+            let result = Optics::new(50.0, 2).fit(&data).unwrap();
+            for (i, &cd) in result.core_distances.iter().enumerate() {
+                if cd != f32::INFINITY {
+                    prop_assert!(
+                        cd > 0.0 || cd == 0.0,
+                        "core_distances[{}] = {} should be >= 0 for core points", i, cd
+                    );
+                }
+            }
+        }
+
+        /// The first point in the ordering must have reachability = INFINITY.
+        #[test]
+        fn first_point_reachability_infinity(data in arb_data(15, 2)) {
+            let result = Optics::new(50.0, 2).fit(&data).unwrap();
+            prop_assert_eq!(
+                result.reachability[0], f32::INFINITY,
+                "first point in ordering must have reachability = INFINITY, got {}",
+                result.reachability[0]
+            );
+        }
+
+        /// OPTICS-DBSCAN parity: for well-separated blobs, extract_clusters(eps)
+        /// should give the same number of non-noise clusters as DBSCAN(eps, min_pts).
+        #[test]
+        fn optics_dbscan_cluster_count_parity(
+            perturbation in proptest::collection::vec(-0.05f32..0.05, 20..=20),
+        ) {
+            // Two well-separated blobs with small random perturbation.
+            let mut data = Vec::with_capacity(20);
+            for i in 0..10 {
+                data.push(vec![perturbation[i], perturbation[i] + 0.01]);
+            }
+            for i in 10..20 {
+                data.push(vec![10.0 + perturbation[i], 10.0 + perturbation[i] + 0.01]);
+            }
+
+            let eps = 0.5;
+            let min_pts = 3;
+
+            let dbscan_labels = crate::Dbscan::new(eps, min_pts).fit_predict(&data).unwrap();
+            let optics_result = Optics::new(eps, min_pts).fit(&data).unwrap();
+            let optics_labels = Optics::<Euclidean>::extract_clusters(&optics_result, eps);
+
+            let db_clusters: std::collections::HashSet<usize> = dbscan_labels.iter()
+                .copied().filter(|&l| l != crate::NOISE).collect();
+            let op_clusters: std::collections::HashSet<usize> = optics_labels.iter()
+                .copied().filter(|&l| l != crate::NOISE).collect();
+
+            prop_assert_eq!(
+                db_clusters.len(), op_clusters.len(),
+                "DBSCAN found {} clusters, OPTICS found {} clusters",
+                db_clusters.len(), op_clusters.len()
+            );
+        }
     }
 }

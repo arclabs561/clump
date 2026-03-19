@@ -898,5 +898,48 @@ mod proptests {
                 "reported cost {} != recomputed cost {}", result.cost, expected_cost
             );
         }
+
+        /// With all strongly positive edges, the result has fewer clusters than items.
+        #[test]
+        fn all_positive_fewer_clusters(n_items in 3usize..12) {
+            let mut edges = Vec::new();
+            for i in 0..n_items {
+                for j in (i+1)..n_items {
+                    edges.push(SignedEdge { i, j, weight: 2.0 });
+                }
+            }
+
+            let result = CorrelationClustering::new()
+                .with_seed(42)
+                .fit(n_items, &edges)
+                .unwrap();
+
+            prop_assert!(result.n_clusters <= n_items,
+                "n_clusters {} > n_items {}", result.n_clusters, n_items);
+            prop_assert!(result.n_clusters < n_items,
+                "strongly positive edges should merge at least one pair: \
+                 n_clusters={}, n_items={}", result.n_clusters, n_items);
+        }
+
+        /// With all negative edges, the number of clusters is at least floor(n/2).
+        #[test]
+        fn all_negative_many_clusters(n_items in 3usize..12) {
+            let mut edges = Vec::new();
+            for i in 0..n_items {
+                for j in (i+1)..n_items {
+                    edges.push(SignedEdge { i, j, weight: -2.0 });
+                }
+            }
+
+            let result = CorrelationClustering::new()
+                .with_seed(42)
+                .fit(n_items, &edges)
+                .unwrap();
+
+            let min_expected = n_items / 2;
+            prop_assert!(result.n_clusters >= min_expected,
+                "all-negative edges: n_clusters {} < floor(n/2)={} for n_items={}",
+                result.n_clusters, min_expected, n_items);
+        }
     }
 }

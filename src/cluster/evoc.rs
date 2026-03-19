@@ -867,4 +867,85 @@ mod tests {
         let result = evoc.fit_predict(&data);
         assert!(result.is_err());
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_data(max_n: usize, d: usize) -> impl Strategy<Value = Vec<Vec<f32>>> {
+            proptest::collection::vec(proptest::collection::vec(-10.0f32..10.0, d..=d), 4..=max_n)
+        }
+
+        fn evoc_params() -> EVoCParams {
+            EVoCParams {
+                intermediate_dim: 1,
+                min_cluster_size: 2,
+                seed: Some(42),
+                ..Default::default()
+            }
+        }
+
+        proptest! {
+            /// All labels from fit_predict are either None (noise) or Some(id) with id < n.
+            #[test]
+            fn labels_valid(data in arb_data(12, 2)) {
+                let n = data.len();
+                let mut evoc = EVoC::new(evoc_params());
+                let labels = evoc.fit_predict(&data).unwrap();
+
+                for (i, label) in labels.iter().enumerate() {
+                    if let Some(cid) = label {
+                        prop_assert!(*cid < n,
+                            "point {} has cluster_id {} >= n={}", i, cid, n);
+                    }
+                }
+            }
+
+            /// Label vector length must equal data length.
+            #[test]
+            fn label_count_matches_data(data in arb_data(12, 3)) {
+                let n = data.len();
+                let mut evoc = EVoC::new(evoc_params());
+                let labels = evoc.fit_predict(&data).unwrap();
+
+                prop_assert_eq!(labels.len(), n,
+                    "expected {} labels, got {}", n, labels.len());
+            }
+
+            /// Each layer's assignments has length n, and non-None values are valid cluster ids.
+            #[test]
+            fn hierarchy_layers_valid(data in arb_data(12, 2)) {
+                let n = data.len();
+                let mut evoc = EVoC::new(evoc_params());
+                evoc.fit(&data).unwrap();
+
+                for (li, layer) in evoc.cluster_layers().iter().enumerate() {
+                    prop_assert_eq!(layer.assignments.len(), n,
+                        "layer {} assignments length {} != n={}", li, layer.assignments.len(), n);
+
+                    for (i, label) in layer.assignments.iter().enumerate() {
+                        if let Some(cid) = label {
+                            prop_assert!(*cid < layer.num_clusters,
+                                "layer {} point {} has cluster_id {} >= num_clusters={}",
+                                li, i, cid, layer.num_clusters);
+                        }
+                    }
+                }
+            }
+
+            /// All-identical points should not panic.
+            #[test]
+            fn all_identical_no_crash(
+                n in 4usize..12,
+                x in -10.0f32..10.0,
+                y in -10.0f32..10.0,
+            ) {
+                let point = vec![x, y];
+                let data = vec![point; n];
+                let mut evoc = EVoC::new(evoc_params());
+                let result = evoc.fit_predict(&data);
+                prop_assert!(result.is_ok(), "fit_predict panicked or errored on identical points");
+            }
+        }
+    }
 }
