@@ -592,6 +592,38 @@ fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usi
         label_all_points(&condensed, &selected, n, i, label, &mut labels);
     }
 
+    // Enforce min_cluster_size: relabel undersized clusters as NOISE.
+    // This can happen when stability selection picks a cluster whose point
+    // count in the final labeling is smaller than min_cluster_size due to
+    // points being claimed by overlapping descendant selections.
+    if min_cluster_size > 1 {
+        let mut counts = vec![0usize; next_label];
+        for &l in &labels {
+            if l != NOISE && l < next_label {
+                counts[l] += 1;
+            }
+        }
+        for l in labels.iter_mut() {
+            if *l != NOISE && *l < next_label && counts[*l] < min_cluster_size {
+                *l = NOISE;
+            }
+        }
+        // Relabel to remove gaps from removed clusters.
+        let mut remap = vec![NOISE; next_label];
+        let mut new_id = 0;
+        for (old, &count) in counts.iter().enumerate() {
+            if count >= min_cluster_size {
+                remap[old] = new_id;
+                new_id += 1;
+            }
+        }
+        for l in &mut labels {
+            if *l != NOISE {
+                *l = remap[*l];
+            }
+        }
+    }
+
     labels
 }
 
@@ -980,9 +1012,6 @@ mod proptests {
         }
 
         /// Non-noise clusters must have >= min_cluster_size points.
-        /// Known issue: extract_clusters may produce undersized clusters
-        /// in edge cases with very small or degenerate data. This test
-        /// documents the invariant; violations should be investigated.
         #[test]
         fn min_cluster_size_respected(data in arb_data(30, 2)) {
             let min_cs = 3;
@@ -995,22 +1024,13 @@ mod proptests {
                     *counts.entry(l).or_insert(0usize) += 1;
                 }
             }
-            // Post-filter: relabel undersized clusters as noise.
-            // This is a known limitation of the condensed tree extraction.
-            let mut relabeled = labels.clone();
-            for (i, &l) in labels.iter().enumerate() {
-                if l != NOISE {
-                    if let Some(&count) = counts.get(&l) {
-                        if count < min_cs {
-                            relabeled[i] = NOISE;
-                        }
-                    }
-                }
+            for (&cluster, &count) in &counts {
+                prop_assert!(
+                    count >= min_cs,
+                    "cluster {} has {} points < min_cluster_size {}",
+                    cluster, count, min_cs
+                );
             }
-            // Verify that most points are correctly clustered.
-            let noise_ratio = relabeled.iter().filter(|&&l| l == NOISE).count() as f64
-                / data.len() as f64;
-            prop_assert!(noise_ratio <= 1.0); // always true, but documents intent
         }
     }
 }
