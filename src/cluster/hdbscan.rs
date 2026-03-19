@@ -1032,5 +1032,60 @@ mod proptests {
                 );
             }
         }
+
+        /// All points must be NOISE when min_cluster_size > n.
+        #[test]
+        fn all_noise_when_min_cluster_size_gt_n(data in arb_data(15, 2)) {
+            let n = data.len();
+            let labels = Hdbscan::new()
+                .with_min_samples(2)
+                .with_min_cluster_size(n + 1)
+                .fit_predict(&data).unwrap();
+            for (i, &l) in labels.iter().enumerate() {
+                prop_assert_eq!(l, NOISE, "point {} should be NOISE when min_cluster_size > n", i);
+            }
+        }
+
+        /// HDBSCAN is deterministic: same data gives same labels.
+        #[test]
+        fn deterministic(data in arb_data(15, 2)) {
+            let hdb = Hdbscan::new().with_min_samples(2).with_min_cluster_size(3);
+            let l1 = hdb.fit_predict(&data).unwrap();
+            let l2 = hdb.fit_predict(&data).unwrap();
+            prop_assert_eq!(&l1, &l2, "HDBSCAN must be deterministic");
+        }
+
+        /// All-identical points must not crash and must produce valid labels.
+        #[test]
+        fn all_identical_no_crash(
+            point in proptest::collection::vec(-10.0f32..10.0, 2..=2),
+            n in 3usize..10,
+        ) {
+            let data: Vec<Vec<f32>> = vec![point; n];
+            let labels = Hdbscan::new()
+                .with_min_samples(2)
+                .with_min_cluster_size(2)
+                .fit_predict(&data).unwrap();
+            prop_assert_eq!(labels.len(), n);
+            for &l in &labels {
+                prop_assert!(l == NOISE || l < n, "label out of range: {}", l);
+            }
+        }
+
+        /// Outlier scores from fit() must be in [0.0, 1.0] and finite.
+        #[test]
+        fn outlier_scores_bounded(data in arb_data(15, 2)) {
+            let result = Hdbscan::new()
+                .with_min_samples(2)
+                .with_min_cluster_size(3)
+                .fit(&data).unwrap();
+            for (i, &s) in result.outlier_scores.iter().enumerate() {
+                prop_assert!(s.is_finite(), "outlier_scores[{}] is not finite: {}", i, s);
+                prop_assert!(
+                    (0.0..=1.0).contains(&s),
+                    "outlier_scores[{}] = {} not in [0,1]", i, s
+                );
+            }
+        }
     }
 }

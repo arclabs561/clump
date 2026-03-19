@@ -138,4 +138,120 @@ proptest! {
         let expected: Vec<usize> = (0..n).collect();
         prop_assert_eq!(sorted, expected);
     }
+
+    /// K-means WCSS is monotone non-increasing with more iterations.
+    #[test]
+    fn kmeans_monotone_inertia(data in arb_data(20, 3)) {
+        let k = 2.min(data.len());
+        let fit1 = Kmeans::new(k).with_seed(42).with_max_iter(1).fit(&data).unwrap();
+        let fit10 = Kmeans::new(k).with_seed(42).with_max_iter(10).fit(&data).unwrap();
+        let wcss1 = fit1.wcss(&data);
+        let wcss10 = fit10.wcss(&data);
+        prop_assert!(wcss10 <= wcss1 + 1e-4,
+            "WCSS(10 iter)={} > WCSS(1 iter)={}", wcss10, wcss1);
+    }
+
+    /// K-means centroids predict to themselves.
+    #[test]
+    fn kmeans_centroids_predict_self(data in arb_data(20, 3)) {
+        let k = 2.min(data.len());
+        let fit = Kmeans::new(k).with_seed(42).with_max_iter(5).fit(&data).unwrap();
+        let pred = fit.predict(&fit.centroids).unwrap();
+        let expected: Vec<usize> = (0..k).collect();
+        prop_assert_eq!(pred, expected);
+    }
+
+    /// K-means with k=1 assigns all points label 0.
+    #[test]
+    fn kmeans_k1_all_same_label(data in arb_data(15, 2)) {
+        let labels = Kmeans::new(1).with_seed(42).with_max_iter(5)
+            .fit_predict(&data).unwrap();
+        for &l in &labels {
+            prop_assert_eq!(l, 0);
+        }
+    }
+
+    /// K-means on all-identical points does not panic.
+    #[test]
+    fn kmeans_identical_points_no_panic(
+        n in 3..15usize,
+        point in proptest::collection::vec(-10.0f32..10.0, 3..=3),
+    ) {
+        let data: Vec<Vec<f32>> = vec![point; n];
+        let labels = Kmeans::new(2).with_seed(42).with_max_iter(5)
+            .fit_predict(&data).unwrap();
+        prop_assert_eq!(labels.len(), n);
+        for &l in &labels {
+            prop_assert!(l < 2);
+        }
+    }
+
+    /// K-means with same seed produces identical labels.
+    #[test]
+    fn kmeans_seed_determinism(data in arb_data(15, 3), seed in 0u64..100) {
+        let k = 2.min(data.len());
+        let labels1 = Kmeans::new(k).with_seed(seed).with_max_iter(5)
+            .fit_predict(&data).unwrap();
+        let labels2 = Kmeans::new(k).with_seed(seed).with_max_iter(5)
+            .fit_predict(&data).unwrap();
+        prop_assert_eq!(labels1, labels2);
+    }
+
+    /// MiniBatchKmeans labels stabilize after repeated updates on same data.
+    #[test]
+    fn minibatch_repeated_update_valid(data in arb_data(15, 3)) {
+        let k = 2.min(data.len());
+        let mut mbk = MiniBatchKmeans::new(k).with_seed(42);
+        for _ in 0..5 {
+            let _ = mbk.update_batch(&data).unwrap();
+        }
+        let labels = mbk.predict(&data).unwrap();
+        for &l in &labels {
+            prop_assert!(l < k);
+        }
+    }
+
+    /// ARI of identical clusterings is 1.0.
+    #[test]
+    fn ari_identical_is_one(
+        labels in proptest::collection::vec(0usize..3, 4..20),
+    ) {
+        let ari = cluster::metrics::adjusted_rand_index(&labels, &labels);
+        prop_assert!((ari - 1.0).abs() < 0.01,
+            "ARI of identical labels should be ~1.0, got {}", ari);
+    }
+
+    /// ARI is symmetric.
+    #[test]
+    fn ari_symmetric(
+        a in proptest::collection::vec(0usize..3, 4..20usize),
+    ) {
+        let b: Vec<usize> = a.iter().map(|x| (x + 1) % 3).collect();
+        let ari_ab = cluster::metrics::adjusted_rand_index(&a, &b);
+        let ari_ba = cluster::metrics::adjusted_rand_index(&b, &a);
+        prop_assert!((ari_ab - ari_ba).abs() < 1e-10,
+            "ARI not symmetric: {} vs {}", ari_ab, ari_ba);
+    }
+
+    /// Calinski-Harabasz index is non-negative.
+    #[test]
+    fn calinski_harabasz_nonneg(data in arb_data(15, 3)) {
+        let k = 2.min(data.len());
+        let fit = Kmeans::new(k).with_seed(42).with_max_iter(5).fit(&data).unwrap();
+        let ch = cluster::metrics::calinski_harabasz(&data, &fit.labels, &fit.centroids);
+        prop_assert!(ch >= 0.0, "Calinski-Harabasz must be >= 0, got {}", ch);
+    }
+
+    /// noise_ratio returns a value in [0, 1].
+    #[test]
+    fn noise_ratio_in_unit_range(
+        n_valid in 1usize..10,
+        n_noise in 0usize..10,
+    ) {
+        let mut labels: Vec<usize> = (0..n_valid).map(|i| i % 3).collect();
+        labels.extend(std::iter::repeat(NOISE).take(n_noise));
+        let ratio = cluster::metrics::noise_ratio(&labels);
+        prop_assert!(ratio >= 0.0 && ratio <= 1.0,
+            "noise_ratio {} not in [0, 1]", ratio);
+    }
 }

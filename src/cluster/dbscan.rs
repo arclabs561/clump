@@ -880,5 +880,69 @@ mod proptests {
             let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
             prop_assert_eq!(labels[0], labels[1], "duplicates must be in same cluster");
         }
+
+        /// All points must be NOISE when min_samples > n.
+        #[test]
+        fn all_noise_when_min_samples_gt_n(data in arb_data(10, 2)) {
+            let n = data.len();
+            let labels = Dbscan::new(1.0, n + 1).fit_predict(&data).unwrap();
+            for (i, &l) in labels.iter().enumerate() {
+                prop_assert_eq!(l, NOISE, "point {} should be NOISE when min_samples > n", i);
+            }
+        }
+
+        /// Monotone eps: larger eps means no more noise than smaller eps.
+        #[test]
+        fn monotone_eps(data in arb_data(15, 2)) {
+            let eps1 = 0.5;
+            let eps2 = 2.0;
+            let labels1 = Dbscan::new(eps1, 2).fit_predict(&data).unwrap();
+            let labels2 = Dbscan::new(eps2, 2).fit_predict(&data).unwrap();
+            let noise1 = labels1.iter().filter(|&&l| l == NOISE).count();
+            let noise2 = labels2.iter().filter(|&&l| l == NOISE).count();
+            prop_assert!(
+                noise2 <= noise1,
+                "larger eps should have <= noise: noise(eps={})={} > noise(eps={})={}",
+                eps2, noise2, eps1, noise1
+            );
+        }
+
+        /// Transitivity: if a and b share a cluster and b and c share a cluster,
+        /// then a and c must share that cluster (label consistency).
+        #[test]
+        fn transitivity(data in arb_data(15, 3)) {
+            let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+            let n = labels.len();
+            for a in 0..n {
+                if labels[a] == NOISE { continue; }
+                for b in (a + 1)..n {
+                    if labels[b] != labels[a] { continue; }
+                    for c in (b + 1)..n {
+                        if labels[c] == labels[b] {
+                            prop_assert_eq!(
+                                labels[a], labels[c],
+                                "transitivity violated: labels[{}]={}, labels[{}]={}, labels[{}]={}",
+                                a, labels[a], b, labels[b], c, labels[c]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        /// All-identical points with eps > 0 and min_samples <= n must be in one cluster.
+        #[test]
+        fn all_identical_points(
+            point in proptest::collection::vec(-10.0f32..10.0, 2..=2),
+            n in 3usize..10,
+        ) {
+            let data: Vec<Vec<f32>> = vec![point; n];
+            let labels = Dbscan::new(0.1, n).fit_predict(&data).unwrap();
+            let first = labels[0];
+            prop_assert_ne!(first, NOISE, "identical points should not be noise");
+            for (i, &l) in labels.iter().enumerate() {
+                prop_assert_eq!(l, first, "point {} should match point 0", i);
+            }
+        }
     }
 }
