@@ -351,10 +351,19 @@ impl<D: DistanceMetric> Kmeans<D> {
             None
         };
 
-        // Note: manual tiled GEMM was benchmarked for first-iteration
-        // assignment and was 50% slower than Hamerly's per-point loop.
-        // Real BLAS GEMM (matrixmultiply/OpenBLAS) needed for a win.
-        // Infrastructure in flat.rs is ready for when BLAS is added.
+        // BLAS GEMM for first-iteration assignment (when blas feature enabled).
+        // matrixmultiply's optimized SGEMM beats per-point distance loops
+        // for large n*k due to micro-kernel SIMD and cache optimization.
+        #[cfg(feature = "blas")]
+        let use_blas = n * self.k >= 100_000 && self.metric.supports_expanded_form();
+        #[cfg(feature = "blas")]
+        let blas_data = if use_blas {
+            let fd = super::flat::FlatMatrix::from_vecs(data);
+            let xn = fd.row_norms_sq();
+            Some((fd, xn))
+        } else {
+            None
+        };
 
         let mut iters = 0usize;
         for iter in 0..self.max_iter {
@@ -367,18 +376,43 @@ impl<D: DistanceMetric> Kmeans<D> {
             counts.fill(0);
 
             // Assignment step.
-            // Priority: GPU > parallel CPU > expanded CPU > generic CPU.
+            // Priority: GPU > BLAS GEMM (first iter) > Hamerly bounds.
+            #[cfg(feature = "blas")]
+            let blas_used = if iter == 0 && use_blas {
+                if let Some((ref fd, ref xn)) = blas_data {
+                    let fc = super::flat::FlatMatrix::from_vecs(&centroids);
+                    let cn = fc.row_norms_sq();
+                    let (new_labels, new_upper) = fd.blas_assign(&fc, xn, &cn);
+                    labels.copy_from_slice(&new_labels);
+                    for i in 0..n {
+                        upper_bounds[i] = new_upper[i];
+                        lower_bounds[i] = 0.0;
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            #[cfg(not(feature = "blas"))]
+            let blas_used = false;
+
             #[cfg(feature = "gpu")]
-            let gpu_used = if let Some(ref assigner) = gpu_assigner {
-                let centroids_flat = super::gpu::flatten(&centroids);
-                let gpu_labels = assigner.assign(&centroids_flat);
-                labels.copy_from_slice(&gpu_labels);
-                true
+            let gpu_used = if !blas_used {
+                if let Some(ref assigner) = gpu_assigner {
+                    let centroids_flat = super::gpu::flatten(&centroids);
+                    let gpu_labels = assigner.assign(&centroids_flat);
+                    labels.copy_from_slice(&gpu_labels);
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             };
             #[cfg(not(feature = "gpu"))]
-            let gpu_used = false;
+            let gpu_used = blas_used; // skip Hamerly if BLAS handled it
 
             if !gpu_used {
                 // Hamerly bounds-based assignment: skips distance computation

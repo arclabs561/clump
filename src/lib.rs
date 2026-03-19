@@ -14,8 +14,8 @@
 //! Noise points from DBSCAN/HDBSCAN are labeled with the sentinel
 //! [`NOISE`] (`usize::MAX`).
 
-#![cfg_attr(not(feature = "gpu"), forbid(unsafe_code))]
-#![cfg_attr(feature = "gpu", deny(unsafe_code))]
+#![cfg_attr(not(any(feature = "gpu", feature = "blas")), forbid(unsafe_code))]
+#![cfg_attr(any(feature = "gpu", feature = "blas"), deny(unsafe_code))]
 #![warn(missing_docs)]
 
 pub mod cluster;

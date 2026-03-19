@@ -110,6 +110,63 @@ impl FlatMatrix {
 
         (labels, upper)
     }
+
+    /// BLAS GEMM-based assignment using matrixmultiply crate.
+    ///
+    /// Computes X @ C^T via optimized SGEMM, then finds argmin per row.
+    /// This is the FAISS/scikit-learn approach: 2-5x faster than per-point
+    /// distance loops for large k due to micro-kernel SIMD optimization.
+    #[cfg(feature = "blas")]
+    #[allow(unsafe_code)]
+    pub(crate) fn blas_assign(
+        &self,
+        centroids: &FlatMatrix,
+        x_norms: &[f32],
+        c_norms: &[f32],
+    ) -> (Vec<usize>, Vec<f32>) {
+        let n = self.n;
+        let k = centroids.n();
+        let d = self.d;
+
+        // Compute X @ C^T (n x k matrix) via SGEMM.
+        let mut xct = vec![0.0f32; n * k];
+        unsafe {
+            matrixmultiply::sgemm(
+                n,   // m
+                k,   // n (output cols)
+                d,   // k (inner dim)
+                1.0, // alpha
+                self.data.as_ptr(),
+                d as isize, // row stride of X
+                1,          // col stride of X
+                centroids.data.as_ptr(),
+                d as isize, // row stride of C (each centroid is a row)
+                1,          // col stride of C
+                0.0,        // beta
+                xct.as_mut_ptr(),
+                k as isize, // row stride of output
+                1,          // col stride of output
+            );
+        }
+
+        // Compute ||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c and find argmin.
+        let mut labels = vec![0usize; n];
+        let mut upper = vec![f32::MAX; n];
+
+        for i in 0..n {
+            let xn = x_norms[i];
+            let row_offset = i * k;
+            for j in 0..k {
+                let dist = xn + c_norms[j] - 2.0 * xct[row_offset + j];
+                if dist < upper[i] {
+                    upper[i] = dist;
+                    labels[i] = j;
+                }
+            }
+        }
+
+        (labels, upper)
+    }
 }
 
 #[cfg(test)]
