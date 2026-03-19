@@ -244,6 +244,68 @@ fn bench_optics(c: &mut Criterion) {
         b.iter(|| clump::Optics::new(1.0, 5).fit(black_box(&data)).unwrap())
     });
 
+    let data_2k = synth_data(2000, 16, 42);
+    group.bench_function("n2000_d16", |b| {
+        b.iter(|| clump::Optics::new(1.0, 5).fit(black_box(&data_2k)).unwrap())
+    });
+
+    // Extract clusters from OPTICS result.
+    let data_500 = synth_data(500, 16, 42);
+    group.bench_function("n500_d16_extract", |b| {
+        let result = clump::Optics::new(1.0, 5).fit(&data_500).unwrap();
+        b.iter(|| clump::Optics::<clump::Euclidean>::extract_clusters(black_box(&result), 0.5))
+    });
+
+    group.finish();
+}
+
+fn bench_metrics(c: &mut Criterion) {
+    use clump::cluster::metrics;
+    use clump::Euclidean;
+
+    let mut group = c.benchmark_group("metrics");
+
+    let data = synth_data(500, 16, 42);
+    let labels = Kmeans::new(5)
+        .with_seed(42)
+        .with_max_iter(10)
+        .fit_predict(&data)
+        .unwrap();
+    let fit = Kmeans::new(5)
+        .with_seed(42)
+        .with_max_iter(10)
+        .fit(&data)
+        .unwrap();
+
+    group.bench_function("silhouette_n500_d16_k5", |b| {
+        b.iter(|| metrics::silhouette_score(black_box(&data), black_box(&labels), &Euclidean))
+    });
+
+    group.bench_function("calinski_harabasz_n500_d16_k5", |b| {
+        b.iter(|| {
+            metrics::calinski_harabasz(
+                black_box(&data),
+                black_box(&labels),
+                black_box(&fit.centroids),
+            )
+        })
+    });
+
+    group.bench_function("davies_bouldin_n500_d16_k5", |b| {
+        b.iter(|| {
+            metrics::davies_bouldin(
+                black_box(&data),
+                black_box(&labels),
+                black_box(&fit.centroids),
+                &Euclidean,
+            )
+        })
+    });
+
+    group.bench_function("k_distance_n500_d16_k4", |b| {
+        b.iter(|| metrics::k_distance(black_box(&data), 4, &Euclidean))
+    });
+
     group.finish();
 }
 
@@ -303,5 +365,6 @@ criterion_group!(
     bench_optics,
     bench_evoc,
     bench_correlation,
+    bench_metrics,
 );
 criterion_main!(benches);
