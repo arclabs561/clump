@@ -393,6 +393,94 @@ fn metrics_reject_nan() {
     cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
 }
 
+proptest! {
+    /// HDBSCAN non-noise clusters must have >= min_cluster_size points
+    /// (post-GLOSH refactor regression test).
+    #[test]
+    fn hdbscan_min_cluster_size_post_glosh(data in arb_data(25, 2)) {
+        let min_cs = 4;
+        let result = Hdbscan::new()
+            .with_min_samples(2)
+            .with_min_cluster_size(min_cs)
+            .fit(&data)
+            .unwrap();
+
+        // Check labels.
+        let mut counts = std::collections::HashMap::new();
+        for &l in &result.labels {
+            if l != NOISE {
+                *counts.entry(l).or_insert(0usize) += 1;
+            }
+        }
+        for (&cluster, &count) in &counts {
+            prop_assert!(count >= min_cs,
+                "cluster {} has {} points < min_cluster_size {}",
+                cluster, count, min_cs);
+        }
+
+        // Check outlier scores.
+        for (i, &s) in result.outlier_scores.iter().enumerate() {
+            prop_assert!(s.is_finite(), "outlier_scores[{}] is not finite: {}", i, s);
+            prop_assert!((0.0..=1.0).contains(&s),
+                "outlier_scores[{}] = {} not in [0,1]", i, s);
+            if result.labels[i] == NOISE {
+                prop_assert!((s - 1.0).abs() < 1e-6,
+                    "noise point {} should have score 1.0, got {}", i, s);
+            }
+        }
+    }
+
+    /// Davies-Bouldin index is non-negative.
+    #[test]
+    fn davies_bouldin_nonneg(data in arb_data(15, 3)) {
+        let k = 2.min(data.len());
+        let fit = Kmeans::new(k).with_seed(42).with_max_iter(5).fit(&data).unwrap();
+        let db = cluster::metrics::davies_bouldin(&data, &fit.labels, &fit.centroids, &Euclidean);
+        prop_assert!(db >= 0.0, "Davies-Bouldin must be >= 0, got {}", db);
+        prop_assert!(db.is_finite(), "Davies-Bouldin must be finite");
+    }
+
+    /// EVoC produces valid labels (None or Some(id < num_clusters)).
+    #[test]
+    fn evoc_labels_valid(data in arb_data(12, 4)) {
+        let mut evoc = EVoC::new(EVoCParams {
+            intermediate_dim: 2,
+            min_cluster_size: 2,
+            seed: Some(42),
+            ..Default::default()
+        });
+        if data[0].len() > 2 {
+            let labels = evoc.fit_predict(&data).unwrap();
+            prop_assert_eq!(labels.len(), data.len());
+            for (i, label) in labels.iter().enumerate() {
+                if let Some(cid) = label {
+                    prop_assert!(*cid < data.len(),
+                        "point {} has cluster_id {} >= n={}", i, cid, data.len());
+                }
+            }
+        }
+    }
+
+    /// Noise-aware silhouette excludes noise and returns valid range.
+    #[test]
+    fn noise_aware_silhouette_valid(data in arb_data(15, 2)) {
+        let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+        let score = cluster::metrics::silhouette_score_noise_aware(&data, &labels, &Euclidean);
+        prop_assert!(score >= -1.01 && score <= 1.01,
+            "noise-aware silhouette {} not in [-1, 1]", score);
+    }
+
+    /// K-distance curve is sorted ascending.
+    #[test]
+    fn k_distance_sorted(data in arb_data(10, 2)) {
+        let kd = cluster::metrics::k_distance(&data, 2, &Euclidean);
+        prop_assert_eq!(kd.len(), data.len());
+        for w in kd.windows(2) {
+            prop_assert!(w[0] <= w[1] + 1e-6, "k-distance not sorted: {} > {}", w[0], w[1]);
+        }
+    }
+}
+
 #[cfg(feature = "parallel")]
 mod parallel_tests {
     use clump::*;
