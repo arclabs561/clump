@@ -139,16 +139,15 @@ proptest! {
         prop_assert_eq!(sorted, expected);
     }
 
-    /// K-means WCSS is monotone non-increasing with more iterations.
+    /// K-means inertia trace is monotone non-increasing within a single run.
     #[test]
     fn kmeans_monotone_inertia(data in arb_data(20, 3)) {
         let k = 2.min(data.len());
-        let fit1 = Kmeans::new(k).with_seed(42).with_max_iter(1).fit(&data).unwrap();
-        let fit10 = Kmeans::new(k).with_seed(42).with_max_iter(10).fit(&data).unwrap();
-        let wcss1 = fit1.wcss(&data);
-        let wcss10 = fit10.wcss(&data);
-        prop_assert!(wcss10 <= wcss1 + 1e-4,
-            "WCSS(10 iter)={} > WCSS(1 iter)={}", wcss10, wcss1);
+        let fit = Kmeans::new(k).with_seed(42).with_max_iter(20).fit(&data).unwrap();
+        for w in fit.inertia_trace.windows(2) {
+            prop_assert!(w[1] <= w[0] + 1e-4,
+                "inertia increased: {} -> {}", w[0], w[1]);
+        }
     }
 
     /// K-means centroids predict to themselves.
@@ -253,6 +252,19 @@ proptest! {
         let ratio = cluster::metrics::noise_ratio(&labels);
         prop_assert!(ratio >= 0.0 && ratio <= 1.0,
             "noise_ratio {} not in [0, 1]", ratio);
+    }
+
+    /// Sampled silhouette is in [-1, 1].
+    #[test]
+    fn sampled_silhouette_range(data in arb_data(20, 2)) {
+        let k = 2.min(data.len());
+        let labels = Kmeans::new(k).with_seed(42).with_max_iter(3)
+            .fit_predict(&data).unwrap();
+        let score = cluster::metrics::silhouette_score_sampled(
+            &data, &labels, &Euclidean, 10, 99,
+        );
+        prop_assert!(score >= -1.01 && score <= 1.01,
+            "sampled silhouette {} not in [-1, 1]", score);
     }
 
     /// DBSCAN cluster connectivity: every cluster is eps-connected.
