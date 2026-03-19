@@ -254,4 +254,87 @@ proptest! {
         prop_assert!(ratio >= 0.0 && ratio <= 1.0,
             "noise_ratio {} not in [0, 1]", ratio);
     }
+
+    /// DBSCAN cluster connectivity: every cluster is eps-connected.
+    /// Points in the same cluster must be reachable via a chain of eps-neighbors
+    /// through other cluster members (density-reachability invariant).
+    #[test]
+    fn dbscan_cluster_connectivity(
+        data in proptest::collection::vec(
+            proptest::collection::vec(-5.0f32..5.0, 3..=3),
+            5..=20
+        ),
+    ) {
+        let eps = 1.5f32;
+        let labels = Dbscan::new(eps, 2).fit_predict(&data).unwrap();
+
+        let max_label = labels.iter().copied().filter(|&l| l != NOISE).max();
+        if let Some(max_l) = max_label {
+            for cluster_id in 0..=max_l {
+                let members: Vec<usize> = labels.iter().enumerate()
+                    .filter(|(_, &l)| l == cluster_id)
+                    .map(|(i, _)| i)
+                    .collect();
+                if members.len() < 2 { continue; }
+
+                // BFS from first member -- all others must be reachable via
+                // eps-hops through cluster members.
+                let mut reached = vec![false; data.len()];
+                let mut queue = std::collections::VecDeque::new();
+                queue.push_back(members[0]);
+                reached[members[0]] = true;
+
+                while let Some(p) = queue.pop_front() {
+                    for &q in &members {
+                        if !reached[q] && Euclidean.distance(&data[p], &data[q]) <= eps {
+                            reached[q] = true;
+                            queue.push_back(q);
+                        }
+                    }
+                }
+
+                for &m in &members {
+                    prop_assert!(reached[m],
+                        "cluster {} not eps-connected: point {} unreachable from point {}",
+                        cluster_id, m, members[0]);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "parallel")]
+mod parallel_tests {
+    use clump::*;
+    use proptest::prelude::*;
+
+    fn arb_data(max_n: usize, d: usize) -> impl Strategy<Value = Vec<Vec<f32>>> {
+        proptest::collection::vec(
+            proptest::collection::vec(-100.0f32..100.0, d..=d),
+            3..=max_n,
+        )
+    }
+
+    proptest! {
+        /// Parallel k-means is deterministic: same seed produces identical results.
+        #[test]
+        fn parallel_kmeans_deterministic(
+            data in arb_data(30, 4),
+            seed in 0u64..50,
+        ) {
+            let k = 2.min(data.len());
+            let fit1 = Kmeans::new(k).with_seed(seed).with_max_iter(10).fit(&data).unwrap();
+            let fit2 = Kmeans::new(k).with_seed(seed).with_max_iter(10).fit(&data).unwrap();
+            prop_assert_eq!(&fit1.labels, &fit2.labels, "parallel k-means not deterministic");
+            prop_assert_eq!(&fit1.centroids, &fit2.centroids);
+        }
+
+        /// Parallel HDBSCAN is deterministic (no randomness in algorithm).
+        #[test]
+        fn parallel_hdbscan_deterministic(data in arb_data(15, 3)) {
+            let l1 = Hdbscan::new().fit_predict(&data).unwrap();
+            let l2 = Hdbscan::new().fit_predict(&data).unwrap();
+            prop_assert_eq!(&l1, &l2, "parallel HDBSCAN not deterministic");
+        }
+    }
 }
