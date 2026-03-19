@@ -349,16 +349,84 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
     best_cluster
 }
 
-/// Assign all points to nearest centroids using Hamerly's bounds (SDM 2010).
+/// Geometric k-means assignment (inspired by Sharma et al. 2025).
 ///
-/// Maintains per-point upper bound (dist to assigned centroid) and lower bound
-/// (dist to second-nearest). When `upper[i] <= lower[i]`, the point's
-/// assignment cannot change and we skip all k distance computations.
-///
-/// Returns the number of points whose distances were actually recomputed.
-/// Parallel Hamerly assignment using rayon. Each point's bounds check
-/// and potential recomputation are independent, so we parallelize over
-/// points. Returns (new_labels, new_upper, new_lower) computed in parallel.
+/// Bound-free: uses inter-centroid distances to skip points whose
+/// assignment provably cannot change. No per-point bound arrays.
+/// O(k^2) centroid-pair precomputation, O(n) scan with early skip.
+pub(crate) fn geometric_assign<D: DistanceMetric>(
+    data: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    labels: &mut [usize],
+    centroid_shifts: &[f32],
+    metric: &D,
+    first_iter: bool,
+) {
+    let n = data.len();
+    let k = centroids.len();
+
+    if first_iter || k <= 1 {
+        for i in 0..n {
+            let mut best = f32::MAX;
+            let mut best_k = 0;
+            for (j, c) in centroids.iter().enumerate() {
+                let d = metric.distance(&data[i], c);
+                if d < best {
+                    best = d;
+                    best_k = j;
+                }
+            }
+            labels[i] = best_k;
+        }
+        return;
+    }
+
+    // Precompute half inter-centroid distances.
+    let mut half_inter = vec![vec![0.0f32; k]; k];
+    for j1 in 0..k {
+        for j2 in (j1 + 1)..k {
+            let d = metric.distance(&centroids[j1], &centroids[j2]) * 0.5;
+            half_inter[j1][j2] = d;
+            half_inter[j2][j1] = d;
+        }
+    }
+
+    // For each point: skip if inter-centroid gap exceeds displacement sum.
+    for i in 0..n {
+        let assigned = labels[i];
+        let my_shift = centroid_shifts[assigned];
+
+        let mut can_skip = true;
+        for j in 0..k {
+            if j == assigned {
+                continue;
+            }
+            // If any centroid could have gotten close enough to steal this point,
+            // we must recompute.
+            if half_inter[assigned][j] <= my_shift + centroid_shifts[j] {
+                can_skip = false;
+                break;
+            }
+        }
+
+        if can_skip {
+            continue;
+        }
+
+        let mut best = f32::MAX;
+        let mut best_k = assigned;
+        for (j, c) in centroids.iter().enumerate() {
+            let d = metric.distance(&data[i], c);
+            if d < best {
+                best = d;
+                best_k = j;
+            }
+        }
+        labels[i] = best_k;
+    }
+}
+
+/// Parallel Hamerly assignment using rayon.
 #[cfg(feature = "parallel")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
