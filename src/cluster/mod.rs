@@ -67,6 +67,7 @@ mod dbscan;
 pub mod denstream;
 pub mod distance;
 mod evoc;
+mod flat;
 #[cfg(feature = "gpu")]
 pub(crate) mod gpu;
 mod hdbscan;
