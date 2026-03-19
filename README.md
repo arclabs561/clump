@@ -10,21 +10,21 @@ Clustering algorithms for dense `f32` vectors in Rust. 9 algorithms, SIMD-accele
 
 | Algorithm | Kind | Discovers k | Noise handling | Input |
 |-----------|------|-------------|----------------|-------|
-| K-means | Centroid | No (k required) | None | `&[Vec<f32>]` |
-| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `update_batch(&[Vec<f32>])` |
-| DBSCAN | Density | Yes | Labels noise (`NOISE` sentinel) | `&[Vec<f32>]` |
-| HDBSCAN | Density (hierarchical) | Yes | Labels noise | `&[Vec<f32>]` |
-| DenStream | Density (streaming) | Yes | Decays outliers | `update_batch(&[Vec<f32>])` |
-| EVoC | Hierarchical | Yes | Near-duplicate detection | `&[Vec<f32>]` |
-| COP-Kmeans | Constrained centroid | No (k required) | None | `&[Vec<f32>]` + constraints |
-| OPTICS | Density (reachability) | Yes | Reachability plot | `&[Vec<f32>]` |
+| K-means | Centroid | No (k required) | None | `&impl DataRef` |
+| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `&impl DataRef` |
+| DBSCAN | Density | Yes | Labels noise (`NOISE` sentinel) | `&impl DataRef` |
+| HDBSCAN | Density (hierarchical) | Yes | Labels noise | `&impl DataRef` |
+| DenStream | Density (streaming) | Yes | Decays outliers | `&impl DataRef` |
+| EVoC | Hierarchical | Yes | Near-duplicate detection | `&impl DataRef` |
+| COP-Kmeans | Constrained centroid | No (k required) | None | `&impl DataRef` + constraints |
+| OPTICS | Density (reachability) | Yes | Reachability plot | `&impl DataRef` |
 | Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
 
 ## Quickstart
 
 ```toml
 [dependencies]
-clump = "0.4.2"
+clump = "0.5.0"
 ```
 
 ```rust
@@ -47,6 +47,18 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 ```
 
 `Kmeans::fit` returns `KmeansFit` with centroids, which supports `predict` on new points. `Dbscan::fit_predict` assigns noise points to `clump::NOISE`; use `fit_predict_with_noise` for `Option` labels.
+
+## Zero-copy flat input
+
+All algorithms accept `&impl DataRef`. Pass `Vec<Vec<f32>>` or use `FlatRef` for zero-copy flat buffers:
+
+```rust
+use clump::{FlatRef, Kmeans};
+
+let flat = vec![0.0f32, 0.0, 0.1, 0.1, 10.0, 10.0, 10.1, 10.1];
+let data = FlatRef::new(&flat, 4, 2);
+let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
+```
 
 ## Streaming clustering
 
