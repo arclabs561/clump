@@ -826,3 +826,157 @@ pub(crate) fn prim_mst(
     }
     edges
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::distance::{Euclidean, SquaredEuclidean};
+
+    #[test]
+    fn validate_finite_accepts_good_data() {
+        let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        assert!(validate_finite(&data).is_ok());
+    }
+
+    #[test]
+    fn validate_finite_rejects_nan() {
+        let data = vec![vec![1.0, f32::NAN]];
+        assert!(validate_finite(&data).is_err());
+    }
+
+    #[test]
+    fn validate_finite_rejects_inf() {
+        let data = vec![vec![f32::INFINITY, 0.0]];
+        assert!(validate_finite(&data).is_err());
+    }
+
+    #[test]
+    fn validate_finite_empty_is_ok() {
+        let data: Vec<Vec<f32>> = vec![];
+        assert!(validate_finite(&data).is_ok());
+    }
+
+    #[test]
+    fn mean_variance_constant_data() {
+        let data = vec![vec![5.0, 5.0]; 10];
+        let mv = mean_variance(&data);
+        assert!(
+            (mv - 1.0).abs() < 1e-6,
+            "constant data should give clamped variance 1.0, got {mv}"
+        );
+    }
+
+    #[test]
+    fn mean_variance_spread_data() {
+        let data = vec![vec![0.0], vec![10.0]];
+        let mv = mean_variance(&data);
+        assert!(mv > 0.0, "spread data should have positive variance");
+    }
+
+    #[test]
+    fn squared_norms_basic() {
+        let data = vec![vec![3.0, 4.0]];
+        let norms = squared_norms(&data);
+        assert!((norms[0] - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn assign_nearest_finds_closest() {
+        let point = &[0.0, 0.0];
+        let centroids = vec![vec![10.0, 10.0], vec![0.1, 0.1], vec![5.0, 5.0]];
+        let idx = assign_nearest(point, &centroids, &SquaredEuclidean);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn prim_mst_triangle() {
+        // 3-point complete graph with known MST.
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let mst = prim_mst(3, |i, j| Euclidean.distance(&points[i], &points[j]));
+        assert_eq!(mst.len(), 2, "MST of 3 nodes has 2 edges");
+        let total_weight: f32 = mst.iter().map(|(_, _, w)| w).sum();
+        // Optimal MST: two edges of length 1.0 each.
+        assert!(
+            (total_weight - 2.0).abs() < 1e-5,
+            "MST weight should be 2.0, got {total_weight}"
+        );
+    }
+
+    #[test]
+    fn prim_mst_single_node() {
+        let mst = prim_mst(1, |_, _| 0.0);
+        assert!(mst.is_empty());
+    }
+
+    #[test]
+    fn prim_mst_two_nodes() {
+        let mst = prim_mst(2, |_, _| 5.0);
+        assert_eq!(mst.len(), 1);
+        assert!((mst[0].2 - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pairwise_distance_matrix_symmetric() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let dists = pairwise_distance_matrix(&data, &Euclidean);
+        let n = 3;
+        for i in 0..n {
+            for j in 0..n {
+                assert!(
+                    (dists[i * n + j] - dists[j * n + i]).abs() < 1e-6,
+                    "dist matrix not symmetric at ({i},{j})"
+                );
+            }
+            assert!(
+                dists[i * n + i].abs() < 1e-6,
+                "diagonal should be 0 at ({i},{i})"
+            );
+        }
+    }
+
+    #[test]
+    fn union_find_basic() {
+        let mut uf = UnionFind::new(5);
+        assert_ne!(uf.find(0), uf.find(1));
+        uf.union(0, 1);
+        assert_eq!(uf.find(0), uf.find(1));
+        uf.union(2, 3);
+        uf.union(0, 2);
+        assert_eq!(uf.find(0), uf.find(3));
+    }
+
+    #[test]
+    fn kmeanspp_init_correct_count() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![10.0, 10.0],
+            vec![11.0, 10.0],
+        ];
+        let mut rng = StdRng::seed_from_u64(42);
+        let centroids = kmeanspp_init(&data, 3, &SquaredEuclidean, 2.0, &mut rng);
+        assert_eq!(centroids.len(), 3);
+        // All centroids should be from the dataset.
+        for c in &centroids {
+            assert!(data.contains(c), "centroid {:?} not in dataset", c);
+        }
+    }
+
+    #[test]
+    fn kmeanspp_init_distinct() {
+        // With well-separated points, k-means++ should pick distinct centroids.
+        let data = vec![vec![0.0, 0.0], vec![100.0, 0.0], vec![0.0, 100.0]];
+        let mut rng = StdRng::seed_from_u64(42);
+        let centroids = kmeanspp_init(&data, 3, &SquaredEuclidean, 2.0, &mut rng);
+        let unique: std::collections::HashSet<Vec<u32>> = centroids
+            .iter()
+            .map(|c| c.iter().map(|&x| x.to_bits()).collect())
+            .collect();
+        assert_eq!(
+            unique.len(),
+            3,
+            "k-means++ should pick 3 distinct centroids"
+        );
+    }
+}
