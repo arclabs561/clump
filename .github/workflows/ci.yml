@@ -2,9 +2,12 @@ name: ci
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   test:
@@ -16,10 +19,64 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: check
-        run: cargo check --all-targets --all-features
+        run: cargo check --all-targets --features parallel,simd,serde,ndarray,blas
       - name: test
-        run: cargo test --all-features
+        run: cargo test --features parallel,simd,serde,ndarray,blas
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --features parallel,simd,serde,ndarray,blas -- -D warnings
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test (all features incl. GPU)
+        run: cargo test --all-features
+
+  feature-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [parallel, simd, serde, ndarray, blas]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.feature }}
+      - name: test --features ${{ matrix.feature }}
+        run: cargo test --features ${{ matrix.feature }}
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.70.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: check (MSRV 1.70)
+        run: cargo check
+
+  bench:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: run benchmarks
+        run: cargo bench --bench clustering -- --output-format bencher | tee bench-output.txt
+      - name: store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: cargo
+          output-file-path: bench-output.txt
+          alert-threshold: "120%"
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
