@@ -403,19 +403,21 @@ impl<D: DistanceMetric> CopKmeans<D> {
             }
             counts.fill(0);
 
+            // Accumulate in f64 for precision at large n.
+            let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
             for (i, label) in labels.iter().enumerate() {
-                let k = label.unwrap(); // All points are assigned at this stage.
+                let k = label.unwrap();
                 for j in 0..d {
-                    new_centroids[k][j] += data[i][j];
+                    sums_f64[k][j] += data[i][j] as f64;
                 }
                 counts[k] += 1;
             }
 
             for k in 0..self.k {
                 if counts[k] > 0 {
-                    let divisor = counts[k] as f32;
-                    for val in &mut new_centroids[k] {
-                        *val /= divisor;
+                    let divisor = counts[k] as f64;
+                    for j in 0..d {
+                        new_centroids[k][j] = (sums_f64[k][j] / divisor) as f32;
                     }
                 } else {
                     // Empty cluster: reinitialize randomly.
