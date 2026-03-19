@@ -335,6 +335,8 @@ impl<D: DistanceMetric> Kmeans<D> {
         let mut upper_bounds = vec![f32::MAX; n];
         let mut lower_bounds = vec![0.0f32; n];
         let mut centroid_shifts = vec![0.0f32; self.k];
+        let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
+        let mut flat_buf: Vec<f32> = Vec::with_capacity(self.k * d);
 
         // (Expanded squared Euclidean removed -- Hamerly bounds are used
         // for both parallel and sequential paths.)
@@ -428,6 +430,7 @@ impl<D: DistanceMetric> Kmeans<D> {
                         &centroid_shifts,
                         &self.metric,
                         iter == 0,
+                        &mut flat_buf,
                     );
                 }
 
@@ -453,6 +456,7 @@ impl<D: DistanceMetric> Kmeans<D> {
                         &centroid_shifts,
                         &self.metric,
                         iter == 0,
+                        &mut flat_buf,
                     );
                 }
             }
@@ -460,7 +464,9 @@ impl<D: DistanceMetric> Kmeans<D> {
             // Update step: accumulate in f64 to avoid precision loss at
             // large n (sklearn pattern). f32 accumulation loses ~2.5 digits
             // at n=100k, causing convergence issues.
-            let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
+            for s in &mut sums_f64 {
+                s.fill(0.0);
+            }
             for i in 0..n {
                 let k = labels[i];
                 for j in 0..d {

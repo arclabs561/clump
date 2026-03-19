@@ -387,6 +387,7 @@ impl<D: DistanceMetric> CopKmeans<D> {
         // Pre-allocate working buffers outside iteration loop.
         let mut new_centroids = vec![vec![0.0f32; d]; self.k];
         let mut counts = vec![0usize; self.k];
+        let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
         let mut order: Vec<usize> = (0..n).collect();
         let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
 
@@ -404,7 +405,9 @@ impl<D: DistanceMetric> CopKmeans<D> {
             counts.fill(0);
 
             // Accumulate in f64 for precision at large n.
-            let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
+            for s in &mut sums_f64 {
+                s.fill(0.0);
+            }
             for (i, label) in labels.iter().enumerate() {
                 let k = label.unwrap();
                 for j in 0..d {

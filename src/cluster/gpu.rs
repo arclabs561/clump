@@ -116,8 +116,8 @@ impl GpuAssigner {
             label_buf,
             param_buf,
             n,
-            k,
-            d,
+            _k: k,
+            _d: d,
             thread_group_size,
         })
     }
