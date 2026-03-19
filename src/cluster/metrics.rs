@@ -402,12 +402,15 @@ pub fn k_distance<D: DistanceMetric>(data: &[Vec<f32>], k: usize, metric: &D) ->
     let n = data.len();
     let k = k.min(n.saturating_sub(1)).max(1);
     let mut k_dists = Vec::with_capacity(n);
+    let mut dists = Vec::with_capacity(n.saturating_sub(1));
 
     for i in 0..n {
-        let mut dists: Vec<f32> = (0..n)
-            .filter(|&j| j != i)
-            .map(|j| metric.distance(&data[i], &data[j]))
-            .collect();
+        dists.clear();
+        dists.extend(
+            (0..n)
+                .filter(|&j| j != i)
+                .map(|j| metric.distance(&data[i], &data[j])),
+        );
         dists.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
         k_dists.push(dists[k - 1]);
     }
@@ -583,5 +586,48 @@ mod tests {
         assert!((noise_ratio(&[0, 1, noise]) - 1.0 / 3.0).abs() < 0.01);
         assert!((noise_ratio(&[0, 0, 0]) - 0.0).abs() < 0.01);
         assert!((noise_ratio(&[noise, noise]) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn sampled_silhouette_close_to_exact() {
+        // Two well-separated clusters: sampled score should approximate exact.
+        let mut data = Vec::new();
+        let mut labels = Vec::new();
+        for i in 0..50 {
+            data.push(vec![i as f32 * 0.1, 0.0]);
+            labels.push(0);
+        }
+        for i in 0..50 {
+            data.push(vec![100.0 + i as f32 * 0.1, 0.0]);
+            labels.push(1);
+        }
+        let exact = silhouette_score(&data, &labels, &Euclidean);
+        let sampled = silhouette_score_sampled(&data, &labels, &Euclidean, 40, 42);
+        assert!(
+            (exact - sampled).abs() < 0.15,
+            "sampled {sampled} too far from exact {exact}"
+        );
+        assert!(
+            sampled > 0.8,
+            "well-separated clusters should score high, got {sampled}"
+        );
+    }
+
+    #[test]
+    fn sampled_silhouette_fallback_when_small() {
+        // n <= sample_size: should return exact score.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![10.0, 0.0],
+            vec![10.1, 0.0],
+        ];
+        let labels = vec![0, 0, 1, 1];
+        let exact = silhouette_score(&data, &labels, &Euclidean);
+        let sampled = silhouette_score_sampled(&data, &labels, &Euclidean, 100, 42);
+        assert!(
+            (exact - sampled).abs() < 1e-6,
+            "fallback should be exact: {sampled} vs {exact}"
+        );
     }
 }
