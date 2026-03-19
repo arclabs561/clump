@@ -338,6 +338,57 @@ pub fn silhouette_score_noise_aware<D: DistanceMetric>(
     (total / non_noise_indices.len() as f64) as f32
 }
 
+/// Adjusted Rand Index (ARI) for comparing two clusterings.
+///
+/// Measures agreement between two label vectors, adjusted for chance.
+/// Range: [-1, 1]. ARI = 1 means perfect agreement, ARI = 0 means
+/// random agreement, ARI < 0 means worse than random.
+///
+/// Useful for comparing a clustering result against ground truth, or
+/// for comparing two different algorithms on the same data.
+///
+/// Noise labels (`usize::MAX`) are treated as a special cluster.
+pub fn adjusted_rand_index(labels_a: &[usize], labels_b: &[usize]) -> f64 {
+    let n = labels_a.len();
+    assert_eq!(n, labels_b.len());
+    if n <= 1 {
+        return 1.0;
+    }
+
+    // Build contingency table using HashMaps (sparse).
+    use std::collections::HashMap;
+    let mut contingency: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut row_sums: HashMap<usize, usize> = HashMap::new();
+    let mut col_sums: HashMap<usize, usize> = HashMap::new();
+
+    for i in 0..n {
+        *contingency.entry((labels_a[i], labels_b[i])).or_insert(0) += 1;
+        *row_sums.entry(labels_a[i]).or_insert(0) += 1;
+        *col_sums.entry(labels_b[i]).or_insert(0) += 1;
+    }
+
+    // ARI = (index - expected) / (max_index - expected)
+    let comb2 = |x: usize| -> f64 { (x as f64) * (x as f64 - 1.0) / 2.0 };
+
+    let sum_comb_nij: f64 = contingency.values().map(|&v| comb2(v)).sum();
+    let sum_comb_ai: f64 = row_sums.values().map(|&v| comb2(v)).sum();
+    let sum_comb_bi: f64 = col_sums.values().map(|&v| comb2(v)).sum();
+    let comb_n = comb2(n);
+
+    let expected = sum_comb_ai * sum_comb_bi / comb_n;
+    let max_index = (sum_comb_ai + sum_comb_bi) / 2.0;
+
+    if (max_index - expected).abs() < f64::EPSILON {
+        return if (sum_comb_nij - expected).abs() < f64::EPSILON {
+            1.0
+        } else {
+            0.0
+        };
+    }
+
+    (sum_comb_nij - expected) / (max_index - expected)
+}
+
 /// K-distance curve for DBSCAN epsilon selection.
 ///
 /// Computes the distance to each point's k-th nearest neighbor, sorted in
@@ -469,6 +520,41 @@ mod tests {
         let labels = vec![noise, noise, noise];
         let score = silhouette_score_noise_aware(&data, &labels, &Euclidean);
         assert!(score.abs() < 0.01, "all noise should give ~0");
+    }
+
+    #[test]
+    fn ari_perfect_agreement() {
+        let a = vec![0, 0, 1, 1, 2, 2];
+        let b = vec![0, 0, 1, 1, 2, 2];
+        let ari = adjusted_rand_index(&a, &b);
+        assert!(
+            (ari - 1.0).abs() < 0.01,
+            "perfect agreement should give ARI=1, got {ari}"
+        );
+    }
+
+    #[test]
+    fn ari_permuted_labels() {
+        // Same structure, different label numbering.
+        let a = vec![0, 0, 1, 1, 2, 2];
+        let b = vec![2, 2, 0, 0, 1, 1];
+        let ari = adjusted_rand_index(&a, &b);
+        assert!(
+            (ari - 1.0).abs() < 0.01,
+            "permuted labels should give ARI=1, got {ari}"
+        );
+    }
+
+    #[test]
+    fn ari_random_is_near_zero() {
+        // All same vs all different: low agreement.
+        let a = vec![0, 0, 0, 0, 0, 0];
+        let b = vec![0, 1, 2, 3, 4, 5];
+        let ari = adjusted_rand_index(&a, &b);
+        assert!(
+            ari.abs() < 0.5,
+            "random-ish should give ARI near 0, got {ari}"
+        );
     }
 
     #[test]
