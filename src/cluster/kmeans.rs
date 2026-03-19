@@ -116,6 +116,10 @@ pub struct KmeansFit<D: DistanceMetric = SquaredEuclidean> {
     pub labels: Vec<usize>,
     /// Number of Lloyd iterations executed.
     pub iters: usize,
+    /// Per-iteration inertia (WCSS) trace. Entry `i` is the WCSS after
+    /// iteration `i` (0-indexed). Useful for convergence diagnostics and
+    /// verifying monotone improvement.
+    pub inertia_trace: Vec<f32>,
     metric: D,
 }
 
@@ -337,6 +341,7 @@ impl<D: DistanceMetric> Kmeans<D> {
         let mut centroid_shifts = vec![0.0f32; self.k];
         let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
         let mut flat_buf: Vec<f32> = Vec::with_capacity(self.k * d);
+        let mut inertia_trace: Vec<f32> = Vec::with_capacity(self.max_iter);
 
         // (Expanded squared Euclidean removed -- Hamerly bounds are used
         // for both parallel and sequential paths.)
@@ -534,6 +539,14 @@ impl<D: DistanceMetric> Kmeans<D> {
 
             std::mem::swap(&mut centroids, &mut new_centroids);
 
+            // Record per-iteration inertia (WCSS) for convergence diagnostics.
+            let wcss: f32 = labels
+                .iter()
+                .enumerate()
+                .map(|(i, &l)| self.metric.distance(&data[i], &centroids[l]))
+                .sum();
+            inertia_trace.push(wcss);
+
             if shift < effective_tol {
                 break;
             }
@@ -551,6 +564,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             centroids,
             labels,
             iters,
+            inertia_trace,
             metric: self.metric.clone(),
         })
     }
@@ -1130,6 +1144,31 @@ mod proptests {
             let wcss = fit.wcss(&data);
             prop_assert!(wcss >= 0.0, "WCSS must be >= 0, got {}", wcss);
             prop_assert!(wcss.is_finite(), "WCSS must be finite");
+        }
+
+        /// Inertia trace must be monotonically non-increasing.
+        /// Each iteration should produce same or lower WCSS (faiss pattern).
+        #[test]
+        fn inertia_monotone_decreasing(data in arb_data(30, 3)) {
+            let k = 2.min(data.len());
+            let fit = Kmeans::new(k).with_seed(42).with_max_iter(20)
+                .fit(&data).unwrap();
+            let trace = &fit.inertia_trace;
+            prop_assert!(!trace.is_empty(), "inertia trace must not be empty");
+            for w in trace.windows(2) {
+                prop_assert!(w[1] <= w[0] + 1e-5,
+                    "inertia increased: {} -> {}", w[0], w[1]);
+            }
+        }
+
+        /// Inertia trace length must equal iteration count.
+        #[test]
+        fn inertia_trace_length(data in arb_data(20, 3)) {
+            let k = 2.min(data.len());
+            let fit = Kmeans::new(k).with_seed(42).with_max_iter(10)
+                .fit(&data).unwrap();
+            prop_assert_eq!(fit.inertia_trace.len(), fit.iters,
+                "trace length {} != iters {}", fit.inertia_trace.len(), fit.iters);
         }
     }
 }
