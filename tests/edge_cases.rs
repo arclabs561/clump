@@ -396,3 +396,127 @@ fn davies_bouldin_perfect_separation() {
         "perfect separation should have very low DB, got {db}"
     );
 }
+
+// ============================================================================
+// More edge cases from fuzz sweep
+// ============================================================================
+
+#[test]
+fn hdbscan_min_cluster_size_equals_n() {
+    let data = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.0],
+        vec![0.0, 0.1],
+        vec![10.0, 10.0],
+    ];
+    let labels = Hdbscan::new()
+        .with_min_cluster_size(4)
+        .fit_predict(&data)
+        .unwrap();
+    // min_cluster_size = n: at most one cluster or all noise.
+    let non_noise: Vec<_> = labels.iter().filter(|&&l| l != NOISE).collect();
+    assert!(non_noise.len() == 0 || non_noise.len() == 4);
+}
+
+#[test]
+fn dbscan_all_identical_various_eps() {
+    let data = vec![vec![5.0, 5.0]; 10];
+    for eps in [0.001, 0.1, 100.0] {
+        let labels = Dbscan::new(eps, 2).fit_predict(&data).unwrap();
+        // All identical: always one cluster regardless of epsilon.
+        let first = labels[0];
+        assert_ne!(first, NOISE);
+        for &l in &labels {
+            assert_eq!(l, first, "eps={eps}: all identical should be one cluster");
+        }
+    }
+}
+
+#[test]
+fn kmeans_cosine_with_canceling_vectors() {
+    // Vectors that cancel when averaged: [1, 0] and [-1, 0].
+    let data = vec![
+        vec![1.0, 0.0],
+        vec![-1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![0.0, -1.0],
+    ];
+    let fit = Kmeans::with_metric(2, CosineDistance)
+        .with_seed(42)
+        .fit(&data)
+        .unwrap();
+    // Should not panic or produce NaN centroids.
+    for c in &fit.centroids {
+        for &v in c {
+            assert!(v.is_finite(), "centroid has non-finite value: {:?}", c);
+        }
+    }
+}
+
+#[test]
+fn optics_very_small_eps() {
+    let data = vec![
+        vec![0.0, 0.0],
+        vec![0.001, 0.0],
+        vec![10.0, 10.0],
+        vec![10.001, 10.0],
+    ];
+    let result = Optics::new(0.01, 2).fit(&data).unwrap();
+    assert_eq!(result.ordering.len(), 4);
+    // Very tight clusters should still be found.
+}
+
+#[test]
+fn correlation_max_iter_zero() {
+    // max_iter=0: skip local search, return raw PIVOT.
+    let edges = vec![
+        SignedEdge {
+            i: 0,
+            j: 1,
+            weight: 1.0,
+        },
+        SignedEdge {
+            i: 1,
+            j: 2,
+            weight: -1.0,
+        },
+    ];
+    let result = CorrelationClustering::new()
+        .with_seed(42)
+        .with_max_iter(0)
+        .fit(3, &edges)
+        .unwrap();
+    assert_eq!(result.labels.len(), 3);
+    assert!(result.cost >= 0.0, "cost must be non-negative");
+}
+
+#[test]
+fn denstream_predict_before_any_update() {
+    let ds = DenStream::new(0.5, 3);
+    let result = ds.predict(&[1.0, 2.0]);
+    assert!(result.is_err(), "predict before any update should error");
+}
+
+#[test]
+fn minibatch_predict_before_init() {
+    let mbk = MiniBatchKmeans::new(3).with_seed(42);
+    let result = mbk.predict(&[vec![1.0, 2.0]]);
+    assert!(result.is_err(), "predict before init should error");
+}
+
+#[test]
+fn kmeans_with_inner_product_distance() {
+    // InnerProductDistance returns negative values -- ensure no panic.
+    let data = vec![
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![-1.0, 0.0],
+        vec![0.0, -1.0],
+    ];
+    let labels = Kmeans::with_metric(2, InnerProductDistance)
+        .with_seed(42)
+        .fit_predict(&data)
+        .unwrap();
+    assert_eq!(labels.len(), 4);
+    // No assertion on cluster quality -- just must not panic.
+}
