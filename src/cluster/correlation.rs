@@ -1,5 +1,9 @@
 //! Correlation clustering on signed graphs.
 //!
+//! This module operates on **graph** (edge-list) input, not dense vectors.
+//! Use [`CorrelationClustering::edges_from_distances`] to bridge from
+//! distance-based data if needed.
+//!
 //! Correlation clustering partitions a set of items given pairwise similarity
 //! scores, without requiring the number of clusters as input. Each edge carries
 //! a signed weight: positive means "should be together," negative means "should

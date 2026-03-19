@@ -163,11 +163,12 @@ impl GpuAssigner {
 
 /// Flatten `&[Vec<f32>]` into a contiguous row-major `Vec<f32>`.
 #[cfg(feature = "gpu")]
-pub(crate) fn flatten(data: &[Vec<f32>]) -> Vec<f32> {
-    let d = data.first().map_or(0, |v| v.len());
-    let mut flat = Vec::with_capacity(data.len() * d);
-    for row in data {
-        flat.extend_from_slice(row);
+pub(crate) fn flatten(data: &(impl super::flat::DataRef + ?Sized)) -> Vec<f32> {
+    let n = data.n();
+    let d = data.d();
+    let mut flat = Vec::with_capacity(n * d);
+    for i in 0..n {
+        flat.extend_from_slice(data.row(i));
     }
     flat
 }

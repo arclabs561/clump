@@ -17,6 +17,7 @@
 //! (DBSCAN-like) or using the Xi method for automatic detection.
 
 use super::distance::{DistanceMetric, Euclidean};
+use super::flat::DataRef;
 use super::util;
 use crate::error::{Error, Result};
 use std::cmp::Ordering;
@@ -112,8 +113,8 @@ impl<D: DistanceMetric> Optics<D> {
     }
 
     /// Compute the OPTICS ordering and reachability plot.
-    pub fn fit(&self, data: &[Vec<f32>]) -> Result<OpticsResult> {
-        let n = data.len();
+    pub fn fit(&self, data: &(impl DataRef + ?Sized)) -> Result<OpticsResult> {
+        let n = data.n();
         if n == 0 {
             return Err(Error::EmptyInput);
         }
@@ -131,7 +132,7 @@ impl<D: DistanceMetric> Optics<D> {
         let compute_core = |i: usize| -> f32 {
             let mut neighbor_dists: Vec<f32> = (0..n)
                 .filter(|&j| j != i)
-                .map(|j| self.metric.distance(&data[i], &data[j]))
+                .map(|j| self.metric.distance(data.row(i), data.row(j)))
                 .filter(|&d| d <= self.max_epsilon)
                 .collect();
             if neighbor_dists.len() + 1 >= self.min_pts {
@@ -209,18 +210,18 @@ impl<D: DistanceMetric> Optics<D> {
     fn update_seeds(
         &self,
         point: usize,
-        data: &[Vec<f32>],
+        data: &(impl DataRef + ?Sized),
         core_dist: &[f32],
         processed: &[bool],
         reachability: &mut [f32],
         seeds: &mut BinaryHeap<SeedEntry>,
     ) {
         let cd = core_dist[point];
-        for j in 0..data.len() {
+        for j in 0..data.n() {
             if processed[j] || j == point {
                 continue;
             }
-            let dist = self.metric.distance(&data[point], &data[j]);
+            let dist = self.metric.distance(data.row(point), data.row(j));
             if dist > self.max_epsilon {
                 continue;
             }

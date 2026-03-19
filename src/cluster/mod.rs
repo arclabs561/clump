@@ -67,7 +67,7 @@ mod dbscan;
 pub mod denstream;
 pub mod distance;
 mod evoc;
-mod flat;
+pub mod flat;
 #[cfg(feature = "gpu")]
 pub(crate) mod gpu;
 mod hdbscan;
@@ -89,6 +89,7 @@ pub use distance::{
     SquaredEuclidean,
 };
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
+pub use flat::{DataRef, FlatRef};
 pub use hdbscan::{Hdbscan, HdbscanResult};
 pub use kmeans::{Kmeans, KmeansFit};
 pub use optics::{Optics, OpticsResult};

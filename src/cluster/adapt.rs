@@ -46,6 +46,11 @@ pub fn labels_to_array1(labels: &[usize]) -> ndarray::Array1<usize> {
     ndarray::Array1::from(labels.to_vec())
 }
 
+/// Create a [`FlatRef`](super::flat::FlatRef) from a flat slice + dimensions.
+pub fn flat_to_ref(flat: &[f32], n: usize, d: usize) -> super::flat::FlatRef<'_> {
+    super::flat::FlatRef::new(flat, n, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

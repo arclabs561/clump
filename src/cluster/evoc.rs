@@ -22,6 +22,7 @@
 #![allow(clippy::too_many_lines)]
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::flat::DataRef;
 use super::util::{self, UnionFind};
 use crate::error::{Error, Result};
 use rand::prelude::*;
@@ -235,7 +236,7 @@ impl<D: DistanceMetric> EVoC<D> {
     }
 
     /// Fit on dense vectors, storing layers/tree/duplicates on `self`.
-    pub fn fit(&mut self, data: &[Vec<f32>]) -> Result<()> {
+    pub fn fit(&mut self, data: &(impl DataRef + ?Sized)) -> Result<()> {
         self.fit_inner(data)?;
         Ok(())
     }
@@ -243,8 +244,8 @@ impl<D: DistanceMetric> EVoC<D> {
     /// Fit on dense vectors and return a label per point (noise as `None`).
     ///
     /// The returned labels are for the **finest** available layer (largest number of clusters).
-    pub fn fit_predict(&mut self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
-        let n = data.len();
+    pub fn fit_predict(&mut self, data: &(impl DataRef + ?Sized)) -> Result<Vec<Option<usize>>> {
+        let n = data.n();
         self.fit_inner(data)?;
         Ok(self
             .cluster_layers
@@ -252,24 +253,24 @@ impl<D: DistanceMetric> EVoC<D> {
             .map_or_else(|| vec![None; n], |layer| layer.assignments.clone()))
     }
 
-    fn fit_inner(&mut self, data: &[Vec<f32>]) -> Result<()> {
-        if data.is_empty() {
+    fn fit_inner(&mut self, data: &(impl DataRef + ?Sized)) -> Result<()> {
+        if data.n() == 0 {
             return Err(Error::EmptyInput);
         }
 
-        let n = data.len();
-        let d = data[0].len();
+        let n = data.n();
+        let d = data.d();
         if d == 0 {
             return Err(Error::InvalidParameter {
                 name: "dimension",
                 message: "must be at least 1",
             });
         }
-        for point in data.iter().skip(1) {
-            if point.len() != d {
+        for i in 1..n {
+            if data.row(i).len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
-                    found: point.len(),
+                    found: data.row(i).len(),
                 });
             }
         }
@@ -292,8 +293,8 @@ impl<D: DistanceMetric> EVoC<D> {
 
         // Flatten to SoA storage.
         let mut flat: Vec<f32> = Vec::with_capacity(n * d);
-        for v in data {
-            flat.extend_from_slice(v);
+        for i in 0..n {
+            flat.extend_from_slice(data.row(i));
         }
 
         // Step 1: random projection to intermediate space.

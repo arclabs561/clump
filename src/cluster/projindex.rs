@@ -10,12 +10,13 @@
 //! O(n * k) build, O(k * log n + |candidates| * d) per query.
 
 use super::distance::DistanceMetric;
+use super::flat::DataRef;
 use rand::prelude::*;
 
 /// A random projection index with k projection axes.
-pub(crate) struct ProjIndex<'a, D: DistanceMetric> {
+pub(crate) struct ProjIndex<'a, T: DataRef + ?Sized, D: DistanceMetric> {
     /// Original data reference.
-    data: &'a [Vec<f32>],
+    data: &'a T,
     metric: &'a D,
     /// k random unit vectors, each of dimension d.
     axes: Vec<Vec<f32>>,
@@ -23,11 +24,11 @@ pub(crate) struct ProjIndex<'a, D: DistanceMetric> {
     sorted_projs: Vec<Vec<(f32, usize)>>,
 }
 
-impl<'a, D: DistanceMetric> ProjIndex<'a, D> {
+impl<'a, T: DataRef + ?Sized, D: DistanceMetric> ProjIndex<'a, T, D> {
     /// Build a projection index with `num_axes` random projections.
     /// More axes = better pruning but more build/query time. 8-16 is typical.
-    pub(crate) fn new(data: &'a [Vec<f32>], metric: &'a D, num_axes: usize) -> Self {
-        let n = data.len();
+    pub(crate) fn new(data: &'a T, metric: &'a D, num_axes: usize) -> Self {
+        let n = data.n();
         if n == 0 {
             return Self {
                 data,
@@ -36,10 +37,9 @@ impl<'a, D: DistanceMetric> ProjIndex<'a, D> {
                 sorted_projs: Vec::new(),
             };
         }
-        let d = data[0].len();
+        let d = data.d();
         let mut rng = StdRng::seed_from_u64(12345);
 
-        // Generate random unit vectors.
         let axes: Vec<Vec<f32>> = (0..num_axes)
             .map(|_| {
                 let mut v: Vec<f32> = (0..d).map(|_| rng.random::<f32>() - 0.5).collect();
@@ -53,13 +53,17 @@ impl<'a, D: DistanceMetric> ProjIndex<'a, D> {
             })
             .collect();
 
-        // Project all points and sort.
         let sorted_projs: Vec<Vec<(f32, usize)>> = axes
             .iter()
             .map(|axis| {
                 let mut projs: Vec<(f32, usize)> = (0..n)
                     .map(|i| {
-                        let proj: f32 = data[i].iter().zip(axis.iter()).map(|(&x, &a)| x * a).sum();
+                        let proj: f32 = data
+                            .row(i)
+                            .iter()
+                            .zip(axis.iter())
+                            .map(|(&x, &a)| x * a)
+                            .sum();
                         (proj, i)
                     })
                     .collect();
@@ -82,33 +86,26 @@ impl<'a, D: DistanceMetric> ProjIndex<'a, D> {
             return Vec::new();
         }
 
-        let n = self.data.len();
-        // Start with all points as candidates, then filter by each projection.
+        let n = self.data.n();
         let mut candidate_counts = vec![0u16; n];
-
         let num_axes = self.axes.len();
+
         for (axis_idx, axis) in self.axes.iter().enumerate() {
             let proj_q: f32 = query.iter().zip(axis.iter()).map(|(&x, &a)| x * a).sum();
             let lo = proj_q - radius;
             let hi = proj_q + radius;
-
             let sorted = &self.sorted_projs[axis_idx];
-
-            // Binary search for the range [lo, hi].
             let start = sorted.partition_point(|&(v, _)| v < lo);
             let end = sorted.partition_point(|&(v, _)| v <= hi);
-
             for &(_, idx) in &sorted[start..end] {
                 candidate_counts[idx] += 1;
             }
         }
 
-        // Only points that passed ALL projections are candidates.
         let mut results = Vec::new();
         for (i, &count) in candidate_counts.iter().enumerate() {
             if count == num_axes as u16 {
-                // Exact distance check.
-                if self.metric.distance(query, &self.data[i]) <= radius {
+                if self.metric.distance(query, self.data.row(i)) <= radius {
                     results.push(i);
                 }
             }
@@ -130,9 +127,7 @@ mod tests {
             vec![10.0, 10.0],
             vec![10.1, 10.1],
         ];
-        let index = ProjIndex::new(&data, &Euclidean, 8);
-
-        // Query near origin -- should find points 0 and 1.
+        let index = ProjIndex::new(data.as_slice(), &Euclidean, 8);
         let mut results = index.range_query(&[0.0, 0.0], 0.5);
         results.sort();
         assert!(results.contains(&0));
@@ -143,20 +138,18 @@ mod tests {
     #[test]
     fn empty_data() {
         let data: Vec<Vec<f32>> = vec![];
-        let index = ProjIndex::new(&data, &Euclidean, 8);
+        let index = ProjIndex::new(data.as_slice(), &Euclidean, 8);
         assert!(index.range_query(&[0.0], 1.0).is_empty());
     }
 
     #[test]
     fn high_dimensional() {
-        // d=20, n=100
         let mut rng = StdRng::seed_from_u64(42);
         let data: Vec<Vec<f32>> = (0..100)
             .map(|_| (0..20).map(|_| rng.random::<f32>()).collect())
             .collect();
-        let index = ProjIndex::new(&data, &Euclidean, 12);
+        let index = ProjIndex::new(data.as_slice(), &Euclidean, 12);
 
-        // Brute-force reference.
         let query = &data[0];
         let radius = 1.0;
         let mut brute: Vec<usize> = (0..100)
@@ -167,7 +160,6 @@ mod tests {
         let mut indexed = index.range_query(query, radius);
         indexed.sort();
 
-        // Projection index must find all true neighbors (no false negatives).
         for &b in &brute {
             assert!(indexed.contains(&b), "projection index missed neighbor {b}");
         }

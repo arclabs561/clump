@@ -64,6 +64,7 @@
 //! (O(n*k) instead of O(n*k^2)).
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::flat::DataRef;
 use super::util;
 use crate::error::{Error, Result};
 use rand::prelude::*;
@@ -135,8 +136,8 @@ impl<D: DistanceMetric> KmeansFit<D> {
     /// let predicted = fit.predict(&[vec![0.05, 0.05], vec![9.9, 9.9]]).unwrap();
     /// assert_ne!(predicted[0], predicted[1]);
     /// ```
-    pub fn predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
-        if data.is_empty() {
+    pub fn predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
+        if data.n() == 0 {
             return Err(Error::EmptyInput);
         }
         if self.centroids.is_empty() {
@@ -147,8 +148,9 @@ impl<D: DistanceMetric> KmeansFit<D> {
         }
 
         let d = self.centroids[0].len();
-        let mut out = Vec::with_capacity(data.len());
-        for point in data {
+        let mut out = Vec::with_capacity(data.n());
+        for i in 0..data.n() {
+            let point = data.row(i);
             if point.len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
@@ -165,10 +167,12 @@ impl<D: DistanceMetric> KmeansFit<D> {
     ///
     /// Sum of squared distances from each point to its assigned centroid.
     /// Used for the elbow method: plot WCSS vs k, pick the "elbow."
-    pub fn wcss(&self, data: &[Vec<f32>]) -> f32 {
-        data.iter()
-            .zip(self.labels.iter())
-            .map(|(point, &label)| self.metric.distance(point, &self.centroids[label]))
+    pub fn wcss(&self, data: &(impl DataRef + ?Sized)) -> f32 {
+        (0..data.n())
+            .map(|i| {
+                self.metric
+                    .distance(data.row(i), &self.centroids[self.labels[i]])
+            })
             .sum()
     }
 }
@@ -260,8 +264,8 @@ impl<D: DistanceMetric> Kmeans<D> {
     /// assert_eq!(fit.labels.len(), 4);
     /// assert!(fit.iters > 0);
     /// ```
-    pub fn fit(&self, data: &[Vec<f32>]) -> Result<KmeansFit<D>> {
-        if data.is_empty() {
+    pub fn fit(&self, data: &(impl DataRef + ?Sized)) -> Result<KmeansFit<D>> {
+        if data.n() == 0 {
             return Err(Error::EmptyInput);
         }
 
@@ -272,8 +276,8 @@ impl<D: DistanceMetric> Kmeans<D> {
             });
         }
 
-        let n = data.len();
-        let d = data[0].len();
+        let n = data.n();
+        let d = data.d();
         if d == 0 {
             return Err(Error::InvalidParameter {
                 name: "dimension",
@@ -289,11 +293,11 @@ impl<D: DistanceMetric> Kmeans<D> {
         }
 
         // Validate uniform dimensionality.
-        for point in data {
-            if point.len() != d {
+        for i in 0..n {
+            if data.row(i).len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
-                    found: point.len(),
+                    found: data.row(i).len(),
                 });
             }
         }
@@ -371,7 +375,7 @@ impl<D: DistanceMetric> Kmeans<D> {
         let use_blas = n * self.k >= 100_000 && self.metric.supports_expanded_form();
         #[cfg(feature = "blas")]
         let blas_data = if use_blas {
-            let fd = super::flat::FlatMatrix::from_vecs(data);
+            let fd = super::flat::FlatMatrix::from_data(data);
             let xn = fd.row_norms_sq();
             Some((fd, xn))
         } else {
@@ -506,8 +510,9 @@ impl<D: DistanceMetric> Kmeans<D> {
             }
             for i in 0..n {
                 let k = labels[i];
+                let row = data.row(i);
                 for j in 0..d {
-                    sums_f64[k][j] += data[i][j] as f64;
+                    sums_f64[k][j] += row[j] as f64;
                 }
                 counts[k] += 1;
             }
@@ -532,14 +537,14 @@ impl<D: DistanceMetric> Kmeans<D> {
                     let mut farthest_dist = -1.0f32;
                     for (i, &label) in labels.iter().enumerate() {
                         if label == largest {
-                            let dist = self.metric.distance(&data[i], &new_centroids[largest]);
+                            let dist = self.metric.distance(data.row(i), &new_centroids[largest]);
                             if dist > farthest_dist {
                                 farthest_dist = dist;
                                 farthest_idx = i;
                             }
                         }
                     }
-                    new_centroids[k] = data[farthest_idx].clone();
+                    new_centroids[k] = data.row(farthest_idx).to_vec();
                 }
             }
 
@@ -575,7 +580,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             let wcss: f32 = labels
                 .iter()
                 .enumerate()
-                .map(|(i, &l)| self.metric.distance(&data[i], &centroids[l]))
+                .map(|(i, &l)| self.metric.distance(data.row(i), &centroids[l]))
                 .sum();
             inertia_trace.push(wcss);
 
@@ -589,7 +594,7 @@ impl<D: DistanceMetric> Kmeans<D> {
         // mutually consistent (the correctness research identified this as
         // a common source of bugs in k-means implementations).
         for (i, label) in labels.iter_mut().enumerate() {
-            *label = util::assign_nearest(&data[i], &centroids, &self.metric);
+            *label = util::assign_nearest(data.row(i), &centroids, &self.metric);
         }
 
         Ok(KmeansFit {
@@ -604,7 +609,7 @@ impl<D: DistanceMetric> Kmeans<D> {
 
 impl<D: DistanceMetric> Kmeans<D> {
     /// Fit and return one cluster label per input point.
-    pub fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+    pub fn fit_predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
         Ok(self.fit(data)?.labels)
     }
 

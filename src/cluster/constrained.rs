@@ -38,6 +38,7 @@
 //! Background Knowledge." ICML 2001.
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::flat::DataRef;
 use super::util;
 use crate::error::{Error, Result};
 use rand::prelude::*;
@@ -219,13 +220,13 @@ impl<D: DistanceMetric> CopKmeans<D> {
     /// no feasible assignment exists.
     fn constrained_assign(
         &self,
-        data: &[Vec<f32>],
+        data: &(impl DataRef + ?Sized),
         centroids: &[Vec<f32>],
         must_links: &[Vec<usize>],
         cannot_links: &[Vec<usize>],
         order: &[usize],
     ) -> Result<Vec<Option<usize>>> {
-        let n = data.len();
+        let n = data.n();
         let mut labels: Vec<Option<usize>> = vec![None; n];
         // Pre-allocate candidate buffer outside the per-point loop.
         let mut candidates: Vec<(usize, f32)> = Vec::with_capacity(self.k);
@@ -245,7 +246,7 @@ impl<D: DistanceMetric> CopKmeans<D> {
             // Sort candidate clusters by distance (nearest first).
             candidates.clear();
             candidates
-                .extend((0..self.k).map(|k| (k, self.metric.distance(&data[i], &centroids[k]))));
+                .extend((0..self.k).map(|k| (k, self.metric.distance(data.row(i), &centroids[k]))));
             candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
             // Pick nearest valid cluster.
@@ -273,10 +274,10 @@ impl<D: DistanceMetric> CopKmeans<D> {
     /// Fit the model with pairwise constraints.
     pub fn fit_predict_constrained(
         &self,
-        data: &[Vec<f32>],
+        data: &(impl DataRef + ?Sized),
         constraints: &[Constraint],
     ) -> Result<Vec<usize>> {
-        if data.is_empty() {
+        if data.n() == 0 {
             return Err(Error::EmptyInput);
         }
 
@@ -287,8 +288,8 @@ impl<D: DistanceMetric> CopKmeans<D> {
             });
         }
 
-        let n = data.len();
-        let d = data[0].len();
+        let n = data.n();
+        let d = data.d();
 
         if d == 0 {
             return Err(Error::InvalidParameter {
@@ -305,11 +306,11 @@ impl<D: DistanceMetric> CopKmeans<D> {
         }
 
         // Validate dimensions.
-        for p in data {
-            if p.len() != d {
+        for i in 0..n {
+            if data.row(i).len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
-                    found: p.len(),
+                    found: data.row(i).len(),
                 });
             }
         }
@@ -410,8 +411,9 @@ impl<D: DistanceMetric> CopKmeans<D> {
             }
             for (i, label) in labels.iter().enumerate() {
                 let k = label.expect("constrained_assign guarantees all labels are Some");
+                let row = data.row(i);
                 for j in 0..d {
-                    sums_f64[k][j] += data[i][j] as f64;
+                    sums_f64[k][j] += row[j] as f64;
                 }
                 counts[k] += 1;
             }
@@ -425,7 +427,7 @@ impl<D: DistanceMetric> CopKmeans<D> {
                 } else {
                     // Empty cluster: reinitialize randomly.
                     let idx = rng.random_range(0..n);
-                    new_centroids[k] = data[idx].clone();
+                    new_centroids[k] = data.row(idx).to_vec();
                 }
             }
 
@@ -620,7 +622,7 @@ mod tests {
     fn empty_input_error() {
         let result = CopKmeans::new(2)
             .with_seed(1)
-            .fit_predict_constrained(&[], &[]);
+            .fit_predict_constrained(&[] as &[Vec<f32>], &[]);
         assert!(result.is_err());
     }
 
