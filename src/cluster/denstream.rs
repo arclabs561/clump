@@ -47,6 +47,7 @@
 
 use super::dbscan::{Dbscan, NOISE};
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::flat::DataRef;
 use crate::error::{Error, Result};
 
 /// A micro-cluster summary (CF-like structure).
@@ -493,14 +494,14 @@ impl<D: DistanceMetric> DenStream<D> {
     }
 
     /// Update the model with a mini-batch of points.
-    pub fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
-        if points.is_empty() {
+    pub fn update_batch(&mut self, points: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
+        if points.n() == 0 {
             return Err(Error::EmptyInput);
         }
 
-        let mut labels = Vec::with_capacity(points.len());
-        for point in points {
-            labels.push(self.update(point)?);
+        let mut labels = Vec::with_capacity(points.n());
+        for i in 0..points.n() {
+            labels.push(self.update(points.row(i))?);
         }
         Ok(labels)
     }
@@ -530,8 +531,10 @@ impl<D: DistanceMetric> DenStream<D> {
     }
 
     /// Predict labels for multiple points without modifying the model.
-    pub fn predict_batch(&self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
-        points.iter().map(|p| self.predict(p)).collect()
+    pub fn predict_batch(&self, points: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
+        (0..points.n())
+            .map(|i| self.predict(points.row(i)))
+            .collect()
     }
 
     /// Get current cluster centroids (one per potential micro-cluster).

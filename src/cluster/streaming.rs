@@ -43,6 +43,7 @@
 //! Sculley, D. (2010). "Web-Scale K-Means Clustering." WWW 2010.
 
 use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::flat::DataRef;
 use super::util;
 use crate::error::{Error, Result};
 use rand::prelude::*;
@@ -149,9 +150,9 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
     }
 
     /// Initialize centroids from a batch using k-means++ seeding.
-    fn init_centroids(&mut self, points: &[Vec<f32>]) -> Result<()> {
-        let n = points.len();
-        let d = points[0].len();
+    fn init_centroids(&mut self, points: &(impl DataRef + ?Sized)) -> Result<()> {
+        let n = points.n();
+        let d = points.d();
 
         if d == 0 {
             return Err(Error::InvalidParameter {
@@ -229,12 +230,12 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
     }
 
     /// Update the model with a mini-batch of points.
-    pub fn update_batch(&mut self, points: &[Vec<f32>]) -> Result<Vec<usize>> {
-        if points.is_empty() {
+    pub fn update_batch(&mut self, points: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
+        if points.n() == 0 {
             return Err(Error::EmptyInput);
         }
 
-        let d = points[0].len();
+        let d = points.d();
         if d == 0 {
             return Err(Error::InvalidParameter {
                 name: "dimension",
@@ -243,11 +244,11 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
         }
 
         // Validate uniform dimensionality.
-        for p in points {
-            if p.len() != d {
+        for i in 0..points.n() {
+            if points.row(i).len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
-                    found: p.len(),
+                    found: points.row(i).len(),
                 });
             }
         }
@@ -257,12 +258,13 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
         if !self.initialized {
             self.init_centroids(points)?;
         } else {
-            self.validate_dimension(&points[0])?;
+            self.validate_dimension(points.row(0))?;
         }
 
         // Assign and update.
-        let mut labels = Vec::with_capacity(points.len());
-        for point in points {
+        let mut labels = Vec::with_capacity(points.n());
+        for i in 0..points.n() {
+            let point = points.row(i);
             let cluster = self.assign(point);
             self.update_centroid(cluster, point);
             labels.push(cluster);
@@ -275,18 +277,18 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
     ///
     /// Read-only inference: assigns each point to its nearest centroid
     /// but does not update centroid positions or counts.
-    pub fn predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
+    pub fn predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
         if !self.initialized {
             return Err(Error::InvalidParameter {
                 name: "state",
                 message: "must call update_batch first to initialize centroids",
             });
         }
-        if data.is_empty() {
+        if data.n() == 0 {
             return Err(Error::EmptyInput);
         }
-        self.validate_dimension(&data[0])?;
-        Ok(data.iter().map(|p| self.assign(p)).collect())
+        self.validate_dimension(data.row(0))?;
+        Ok((0..data.n()).map(|i| self.assign(data.row(i))).collect())
     }
 
     /// Get current cluster centroids.

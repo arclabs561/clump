@@ -7,6 +7,7 @@
 //! - [`davies_bouldin`]: average worst-case cluster similarity (lower = better)
 
 use super::distance::DistanceMetric;
+use super::flat::DataRef;
 
 /// Silhouette score: mean silhouette coefficient across all points.
 ///
@@ -20,8 +21,12 @@ use super::distance::DistanceMetric;
 ///
 /// Complexity: O(n^2 * d) for exact computation. For large n, consider
 /// sampling a subset of points.
-pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], metric: &D) -> f32 {
-    let n = data.len();
+pub fn silhouette_score<D: DistanceMetric>(
+    data: &(impl DataRef + ?Sized),
+    labels: &[usize],
+    metric: &D,
+) -> f32 {
+    let n = data.n();
     if n <= 1 {
         return 0.0;
     }
@@ -68,7 +73,7 @@ pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], 
             if i == j || labels[j] == noise || labels[j] >= k {
                 continue;
             }
-            let d = metric.distance(&data[i], &data[j]) as f64;
+            let d = metric.distance(data.row(i), data.row(j)) as f64;
             cluster_dist_sum[labels[j]] += d;
         }
 
@@ -108,19 +113,23 @@ pub fn silhouette_score<D: DistanceMetric>(data: &[Vec<f32>], labels: &[usize], 
 /// adjusted by degrees of freedom. Higher = better.
 ///
 /// Complexity: O(n * k * d). Only needs centroids + one data pass.
-pub fn calinski_harabasz(data: &[Vec<f32>], labels: &[usize], centroids: &[Vec<f32>]) -> f32 {
-    let n = data.len();
+pub fn calinski_harabasz(
+    data: &(impl DataRef + ?Sized),
+    labels: &[usize],
+    centroids: &[Vec<f32>],
+) -> f32 {
+    let n = data.n();
     let k = centroids.len();
     if k <= 1 || n <= k {
         return 0.0;
     }
 
-    let d = data[0].len();
+    let d = data.d();
 
     // Global centroid.
     let mut global = vec![0.0f64; d];
-    for point in data {
-        for (j, &x) in point.iter().enumerate() {
+    for i in 0..n {
+        for (j, &x) in data.row(i).iter().enumerate() {
             global[j] += x as f64;
         }
     }
@@ -154,13 +163,14 @@ pub fn calinski_harabasz(data: &[Vec<f32>], labels: &[usize], centroids: &[Vec<f
     // Within-cluster dispersion: sum of ||x_i - c_{label(i)}||^2.
     // Skip noise points to avoid index-out-of-bounds.
     let mut within = 0.0f64;
-    for (i, point) in data.iter().enumerate() {
+    for i in 0..n {
         let l = labels[i];
         if l == noise || l >= k {
             continue;
         }
         let centroid = &centroids[l];
-        let sq_dist: f64 = point
+        let sq_dist: f64 = data
+            .row(i)
             .iter()
             .zip(centroid.iter())
             .map(|(&x, &c)| {
@@ -187,7 +197,7 @@ pub fn calinski_harabasz(data: &[Vec<f32>], labels: &[usize], centroids: &[Vec<f
 ///
 /// Complexity: O(n * d + k^2 * d).
 pub fn davies_bouldin<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     labels: &[usize],
     centroids: &[Vec<f32>],
     metric: &D,
@@ -201,12 +211,12 @@ pub fn davies_bouldin<D: DistanceMetric>(
     let noise = super::dbscan::NOISE;
     let mut intra_sum = vec![0.0f64; k];
     let mut sizes = vec![0usize; k];
-    for (i, point) in data.iter().enumerate() {
+    for i in 0..data.n() {
         let ci = labels[i];
         if ci == noise || ci >= k {
             continue;
         }
-        let d = metric.distance(point, &centroids[ci]) as f64;
+        let d = metric.distance(data.row(i), &centroids[ci]) as f64;
         intra_sum[ci] += d;
         sizes[ci] += 1;
     }
@@ -249,13 +259,13 @@ pub fn davies_bouldin<D: DistanceMetric>(
 /// Error scales as O(1/sqrt(sample_size)). For n > 10k, sampling 2000-5000
 /// points gives a good estimate with O(sample^2) instead of O(n^2) cost.
 pub fn silhouette_score_sampled<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     labels: &[usize],
     metric: &D,
     sample_size: usize,
     seed: u64,
 ) -> f32 {
-    let n = data.len();
+    let n = data.n();
     if n <= sample_size {
         return silhouette_score(data, labels, metric);
     }
@@ -266,7 +276,7 @@ pub fn silhouette_score_sampled<D: DistanceMetric>(
     indices.shuffle(&mut rng);
     indices.truncate(sample_size);
 
-    let sampled_data: Vec<Vec<f32>> = indices.iter().map(|&i| data[i].clone()).collect();
+    let sampled_data: Vec<Vec<f32>> = indices.iter().map(|&i| data.row(i).to_vec()).collect();
     let sampled_labels: Vec<usize> = indices.iter().map(|&i| labels[i]).collect();
 
     silhouette_score(&sampled_data, &sampled_labels, metric)
@@ -281,12 +291,12 @@ pub fn silhouette_score_sampled<D: DistanceMetric>(
 ///
 /// Returns 0.0 if all points are noise or only one cluster exists.
 pub fn silhouette_score_noise_aware<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     labels: &[usize],
     metric: &D,
 ) -> f32 {
     let noise = super::dbscan::NOISE;
-    let n = data.len();
+    let n = data.n();
 
     // Filter to non-noise points.
     let non_noise_indices: Vec<usize> = (0..n).filter(|&i| labels[i] != noise).collect();
@@ -322,7 +332,7 @@ pub fn silhouette_score_noise_aware<D: DistanceMetric>(
             if i == j {
                 continue;
             }
-            let d = metric.distance(&data[i], &data[j]) as f64;
+            let d = metric.distance(data.row(i), data.row(j)) as f64;
             cluster_dist_sum[labels[j]] += d;
         }
 
@@ -410,8 +420,12 @@ pub fn adjusted_rand_index(labels_a: &[usize], labels_b: &[usize]) -> f64 {
 /// `k` should typically be `min_pts - 1` (same parameter you'd use for DBSCAN).
 ///
 /// Returns a sorted vector of k-th nearest neighbor distances.
-pub fn k_distance<D: DistanceMetric>(data: &[Vec<f32>], k: usize, metric: &D) -> Vec<f32> {
-    let n = data.len();
+pub fn k_distance<D: DistanceMetric>(
+    data: &(impl DataRef + ?Sized),
+    k: usize,
+    metric: &D,
+) -> Vec<f32> {
+    let n = data.n();
     let k = k.min(n.saturating_sub(1)).max(1);
     let mut k_dists = Vec::with_capacity(n);
     let mut dists = Vec::with_capacity(n.saturating_sub(1));
@@ -421,7 +435,7 @@ pub fn k_distance<D: DistanceMetric>(data: &[Vec<f32>], k: usize, metric: &D) ->
         dists.extend(
             (0..n)
                 .filter(|&j| j != i)
-                .map(|j| metric.distance(&data[i], &data[j])),
+                .map(|j| metric.distance(data.row(i), data.row(j))),
         );
         dists.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
         k_dists.push(dists[k - 1]);

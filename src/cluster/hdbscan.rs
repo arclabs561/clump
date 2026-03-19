@@ -41,6 +41,7 @@
 //! Based on Hierarchical Density Estimates." PAKDD 2013.
 
 use super::distance::{DistanceMetric, Euclidean};
+use super::flat::DataRef;
 use super::util::{self, UnionFind};
 use crate::error::{Error, Result};
 
@@ -112,7 +113,10 @@ impl<D: DistanceMetric> Hdbscan<D> {
     }
 
     /// Fit and predict, returning `None` for noise points.
-    pub fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
+    pub fn fit_predict_with_noise(
+        &self,
+        data: &(impl DataRef + ?Sized),
+    ) -> Result<Vec<Option<usize>>> {
         let labels = self.fit_predict(data)?;
         Ok(labels
             .into_iter()
@@ -135,8 +139,8 @@ impl<D: DistanceMetric> Hdbscan<D> {
     /// Fit and return one cluster label per input point.
     ///
     /// Noise points are labeled with `NOISE` (`usize::MAX`).
-    pub fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
-        let n = data.len();
+    pub fn fit_predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
+        let n = data.n();
         if n == 0 {
             return Err(Error::EmptyInput);
         }
@@ -155,18 +159,18 @@ impl<D: DistanceMetric> Hdbscan<D> {
             });
         }
 
-        let d = data[0].len();
+        let d = data.d();
         if d == 0 {
             return Err(Error::InvalidParameter {
                 name: "dimension",
                 message: "must be at least 1",
             });
         }
-        for point in data.iter().skip(1) {
-            if point.len() != d {
+        for i in 1..n {
+            if data.row(i).len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
-                    found: point.len(),
+                    found: data.row(i).len(),
                 });
             }
         }
@@ -189,10 +193,11 @@ impl<D: DistanceMetric> Hdbscan<D> {
             (cd, mst)
         } else {
             // VP-tree: O(n log n) core distance computation via kNN queries.
-            let cd = core_distances_vptree(data, &self.metric, self.min_samples);
+            let vecs: Vec<Vec<f32>> = (0..n).map(|i| data.row(i).to_vec()).collect();
+            let cd = core_distances_vptree(&vecs, &self.metric, self.min_samples);
             let metric = &self.metric;
             let mst = util::prim_mst(n, |i, j| {
-                let d = metric.distance(&data[i], &data[j]);
+                let d = metric.distance(data.row(i), data.row(j));
                 mutual_reachability(d, cd[i], cd[j])
             });
             (cd, mst)
@@ -211,9 +216,9 @@ impl<D: DistanceMetric> Hdbscan<D> {
     /// Hierarchies). Each point's score is its distance to the nearest core
     /// point, normalized by the cluster's maximum core distance. Score in
     /// [0, 1]; higher = more outlier-like.
-    pub fn fit(&self, data: &[Vec<f32>]) -> Result<HdbscanResult> {
+    pub fn fit(&self, data: &(impl DataRef + ?Sized)) -> Result<HdbscanResult> {
         let labels = self.fit_predict(data)?;
-        let n = data.len();
+        let n = data.n();
 
         // Compute outlier scores: for each point, the distance to its
         // nearest neighbor normalized by the cluster's maximum distance.
@@ -231,13 +236,13 @@ impl<D: DistanceMetric> Hdbscan<D> {
         if k > 0 {
             // Find max intra-cluster distance for each cluster.
             let mut cluster_max_dist = vec![0.0f32; k];
-            let mut cluster_centroids: Vec<Vec<f64>> = vec![vec![0.0f64; data[0].len()]; k];
+            let mut cluster_centroids: Vec<Vec<f64>> = vec![vec![0.0f64; data.d()]; k];
             let mut cluster_sizes = vec![0usize; k];
 
             for (i, &label) in labels.iter().enumerate() {
                 if label != NOISE {
                     cluster_sizes[label] += 1;
-                    for (j, &x) in data[i].iter().enumerate() {
+                    for (j, &x) in data.row(i).iter().enumerate() {
                         cluster_centroids[label][j] += x as f64;
                     }
                 }
@@ -257,7 +262,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
                 }
                 let centroid_f32: Vec<f32> =
                     cluster_centroids[label].iter().map(|&x| x as f32).collect();
-                let dist = self.metric.distance(&data[i], &centroid_f32);
+                let dist = self.metric.distance(data.row(i), &centroid_f32);
                 if dist > cluster_max_dist[label] {
                     cluster_max_dist[label] = dist;
                 }
@@ -269,7 +274,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
                 } else if cluster_max_dist[label] > f32::EPSILON {
                     let centroid_f32: Vec<f32> =
                         cluster_centroids[label].iter().map(|&x| x as f32).collect();
-                    let dist = self.metric.distance(&data[i], &centroid_f32);
+                    let dist = self.metric.distance(data.row(i), &centroid_f32);
                     outlier_scores[i] = dist / cluster_max_dist[label];
                 } else {
                     outlier_scores[i] = 0.0;

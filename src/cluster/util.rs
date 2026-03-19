@@ -44,6 +44,7 @@ impl UnionFind {
 }
 
 use super::distance::DistanceMetric;
+use super::flat::DataRef;
 use crate::error::{Error, Result};
 use rand::prelude::*;
 
@@ -51,8 +52,9 @@ use rand::prelude::*;
 ///
 /// Every `fit_predict` entry point should call this before doing any computation.
 /// A single non-finite value poisons all distance calculations silently.
-pub(crate) fn validate_finite(data: &[Vec<f32>]) -> Result<()> {
-    for (i, point) in data.iter().enumerate() {
+pub(crate) fn validate_finite(data: &(impl DataRef + ?Sized)) -> Result<()> {
+    for i in 0..data.n() {
+        let point = data.row(i);
         for (j, &val) in point.iter().enumerate() {
             if !val.is_finite() {
                 // Leak-free: use a static message since Error::InvalidParameter
@@ -69,22 +71,22 @@ pub(crate) fn validate_finite(data: &[Vec<f32>]) -> Result<()> {
 /// Compute mean per-dimension variance of the dataset.
 ///
 /// Used to normalize convergence tolerance so it scales with data magnitude.
-pub(crate) fn mean_variance(data: &[Vec<f32>]) -> f64 {
-    let n = data.len() as f64;
+pub(crate) fn mean_variance(data: &(impl DataRef + ?Sized)) -> f64 {
+    let n_usize = data.n();
+    let n = n_usize as f64;
     if n < 1.0 {
         return 1.0;
     }
-    let d = data[0].len();
+    let d = data.d();
     if d == 0 {
         return 1.0;
     }
     let mut total_var = 0.0f64;
     for j in 0..d {
-        let mean = data.iter().map(|p| p[j] as f64).sum::<f64>() / n;
-        let var = data
-            .iter()
-            .map(|p| {
-                let diff = p[j] as f64 - mean;
+        let mean = (0..n_usize).map(|i| data.row(i)[j] as f64).sum::<f64>() / n;
+        let var = (0..n_usize)
+            .map(|i| {
+                let diff = data.row(i)[j] as f64 - mean;
                 diff * diff
             })
             .sum::<f64>()
@@ -102,16 +104,16 @@ pub(crate) fn mean_variance(data: &[Vec<f32>]) -> f64 {
 /// Update per-point minimum distances against a new centroid.
 /// Parallelized when n >= 20000 and the `parallel` feature is enabled.
 fn update_min_dists_for_centroid<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     centroid: &[f32],
     min_dists: &mut [f32],
     metric: &D,
 ) {
     #[cfg(feature = "parallel")]
-    if data.len() >= 20_000 {
+    if data.n() >= 20_000 {
         use rayon::prelude::*;
         min_dists.par_iter_mut().enumerate().for_each(|(i, md)| {
-            let d = metric.distance(&data[i], centroid).max(0.0);
+            let d = metric.distance(data.row(i), centroid).max(0.0);
             if d < *md {
                 *md = d;
             }
@@ -120,7 +122,7 @@ fn update_min_dists_for_centroid<D: DistanceMetric>(
     }
 
     for (i, md) in min_dists.iter_mut().enumerate() {
-        let d = metric.distance(&data[i], centroid).max(0.0);
+        let d = metric.distance(data.row(i), centroid).max(0.0);
         if d < *md {
             *md = d;
         }
@@ -134,13 +136,13 @@ fn update_min_dists_for_centroid<D: DistanceMetric>(
 /// (D^2 weighting). Negative distances are clamped to 0 to handle non-metric
 /// distances safely.
 pub(crate) fn kmeanspp_init<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     k: usize,
     metric: &D,
     alpha: f32,
     rng: &mut StdRng,
 ) -> Vec<Vec<f32>> {
-    let n = data.len();
+    let n = data.n();
     let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(k);
 
     // Maintain per-point minimum distance to any selected centroid.
@@ -150,7 +152,7 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
 
     // First centroid: random point.
     let first = rng.random_range(0..n);
-    centroids.push(data[first].clone());
+    centroids.push(data.row(first).to_vec());
 
     // Set initial min_dists (all points vs first centroid).
     // Uses MAX as initial value, so the helper's `if d < *md` always fires.
@@ -171,7 +173,7 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
 
         if total == 0.0 || !total.is_finite() {
             let idx = rng.random_range(0..n);
-            centroids.push(data[idx].clone());
+            centroids.push(data.row(idx).to_vec());
             let new_c = centroids.last().unwrap();
             update_min_dists_for_centroid(data, new_c, &mut min_dists, metric);
             continue;
@@ -189,7 +191,7 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
             }
         }
 
-        centroids.push(data[selected].clone());
+        centroids.push(data.row(selected).to_vec());
 
         // Update min_dists: only check the newly added centroid.
         let new_c = centroids.last().unwrap();
@@ -223,14 +225,14 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
 /// assignment provably cannot change. No per-point bound arrays.
 /// O(k^2) centroid-pair precomputation, O(n) scan with early skip.
 pub(crate) fn geometric_assign<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
     labels: &mut [usize],
     centroid_shifts: &[f32],
     metric: &D,
     first_iter: bool,
 ) {
-    let n = data.len();
+    let n = data.n();
     let k = centroids.len();
 
     if first_iter || k <= 1 {
@@ -238,7 +240,7 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
             let mut best = f32::MAX;
             let mut best_k = 0;
             for (j, c) in centroids.iter().enumerate() {
-                let d = metric.distance(&data[i], c);
+                let d = metric.distance(data.row(i), c);
                 if d < best {
                     best = d;
                     best_k = j;
@@ -269,8 +271,6 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
             if j == assigned {
                 continue;
             }
-            // If any centroid could have gotten close enough to steal this point,
-            // we must recompute.
             if half_inter[assigned][j] <= my_shift + centroid_shifts[j] {
                 can_skip = false;
                 break;
@@ -284,7 +284,7 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
         let mut best = f32::MAX;
         let mut best_k = assigned;
         for (j, c) in centroids.iter().enumerate() {
-            let d = metric.distance(&data[i], c);
+            let d = metric.distance(data.row(i), c);
             if d < best {
                 best = d;
                 best_k = j;
@@ -298,7 +298,7 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
 #[cfg(feature = "parallel")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
     labels: &mut [usize],
     upper: &mut [f32],
@@ -309,9 +309,9 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     flat_buf: &mut Vec<f32>,
 ) {
     use rayon::prelude::*;
-    let n = data.len();
+    let n = data.n();
     let k = centroids.len();
-    let d = if k > 0 { centroids[0].len() } else { 0 };
+    let dim = if k > 0 { centroids[0].len() } else { 0 };
 
     // Reuse caller-provided buffer for cache-friendly parallel access.
     flat_buf.clear();
@@ -326,8 +326,8 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
                 let mut second = f32::MAX;
                 let mut best_k = 0;
                 for j in 0..k {
-                    let c = &flat_centroids[j * d..(j + 1) * d];
-                    let d = metric.distance(&data[i], c);
+                    let c = &flat_centroids[j * dim..(j + 1) * dim];
+                    let d = metric.distance(data.row(i), c);
                     if d < best {
                         second = best;
                         best = d;
@@ -363,7 +363,6 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     }
 
     // Parallel bounds check and recompute.
-    // Each element is (label, upper, lower) -- independent per point.
     let updates: Vec<(usize, f32, f32)> = (0..n)
         .into_par_iter()
         .map(|i| {
@@ -381,8 +380,8 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
             }
 
             // Tighten upper bound using flat centroids.
-            let old_c = &flat_centroids[old_label * d..(old_label + 1) * d];
-            u = metric.distance(&data[i], old_c);
+            let old_c = &flat_centroids[old_label * dim..(old_label + 1) * dim];
+            u = metric.distance(data.row(i), old_c);
 
             if u <= l {
                 return (old_label, u, l);
@@ -399,8 +398,8 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
                     }
                     continue;
                 }
-                let c = &flat_centroids[j * d..(j + 1) * d];
-                let dist = metric.distance(&data[i], c);
+                let c = &flat_centroids[j * dim..(j + 1) * dim];
+                let dist = metric.distance(data.row(i), c);
                 if dist < best {
                     second = best;
                     best = dist;
@@ -422,7 +421,7 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
     labels: &mut [usize],
     upper: &mut [f32],
@@ -432,9 +431,9 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
     first_iter: bool,
     flat_buf: &mut Vec<f32>,
 ) -> usize {
-    let n = data.len();
+    let n = data.n();
     let k = centroids.len();
-    let d = if k > 0 { centroids[0].len() } else { 0 };
+    let dim = if k > 0 { centroids[0].len() } else { 0 };
     let mut recomputed = 0;
 
     // Reuse caller-provided buffer for cache-friendly access.
@@ -449,7 +448,7 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
 
     let batch_dist = |point: &[f32], centroid_idx: usize| -> f32 {
         if use_flat {
-            let c = &flat_centroids[centroid_idx * d..(centroid_idx + 1) * d];
+            let c = &flat_centroids[centroid_idx * dim..(centroid_idx + 1) * dim];
             metric.distance(point, c)
         } else {
             metric.distance(point, &centroids[centroid_idx])
@@ -462,7 +461,7 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
             let mut second = f32::MAX;
             let mut best_k = 0;
             for j in 0..k {
-                let dist = batch_dist(&data[i], j);
+                let dist = batch_dist(data.row(i), j);
                 if dist < best {
                     second = best;
                     best = dist;
@@ -512,7 +511,7 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
         }
 
         // Tighten upper bound by recomputing distance to assigned centroid.
-        upper[i] = batch_dist(&data[i], labels[i]);
+        upper[i] = batch_dist(data.row(i), labels[i]);
 
         if upper[i] <= lower[i] {
             continue;
@@ -530,7 +529,7 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
                 }
                 continue;
             }
-            let dist = batch_dist(&data[i], j);
+            let dist = batch_dist(data.row(i), j);
             if dist < best {
                 second = best;
                 best = dist;
@@ -548,9 +547,9 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
 }
 
 /// Precompute squared norms for each vector.
-pub(crate) fn squared_norms(data: &[Vec<f32>]) -> Vec<f32> {
-    data.iter()
-        .map(|v| v.iter().map(|&x| x * x).sum())
+pub(crate) fn squared_norms(data: &(impl DataRef + ?Sized)) -> Vec<f32> {
+    (0..data.n())
+        .map(|i| data.row(i).iter().map(|&x| x * x).sum())
         .collect()
 }
 
@@ -561,14 +560,14 @@ pub(crate) fn squared_norms(data: &[Vec<f32>]) -> Vec<f32> {
 /// squared distance from point i to its assigned centroid, and lower_bounds[i]
 /// is the distance to the second-nearest centroid.
 pub(crate) fn assign_expanded(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
     data_norms: &[f32],
     centroid_norms: &[f32],
 ) -> (Vec<usize>, Vec<f32>, Vec<f32>) {
-    let n = data.len();
+    let n = data.n();
     let k = centroids.len();
-    let d = if k > 0 { centroids[0].len() } else { 0 };
+    let dim = if k > 0 { centroids[0].len() } else { 0 };
 
     let mut labels = vec![0usize; n];
     let mut upper = vec![f32::MAX; n];
@@ -585,8 +584,8 @@ pub(crate) fn assign_expanded(
 
         for j in 0..k {
             let cn = centroid_norms[j];
-            let c_slice = &flat_c[j * d..(j + 1) * d];
-            let dot: f32 = data[i].iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
+            let c_slice = &flat_c[j * dim..(j + 1) * dim];
+            let dot: f32 = data.row(i).iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
             let dist = (xn + cn - 2.0 * dot).max(0.0);
             if dist < best_dist {
                 second_dist = best_dist;
@@ -607,7 +606,7 @@ pub(crate) fn assign_expanded(
 /// Parallel version of [`assign_expanded`].
 #[cfg(feature = "parallel")]
 pub(crate) fn assign_expanded_parallel(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
     data_norms: &[f32],
     centroid_norms: &[f32],
@@ -615,21 +614,22 @@ pub(crate) fn assign_expanded_parallel(
     use rayon::prelude::*;
 
     let k = centroids.len();
-    let d = if k > 0 { centroids[0].len() } else { 0 };
+    let dim = if k > 0 { centroids[0].len() } else { 0 };
 
     let flat_c: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
 
-    let results: Vec<(usize, f32, f32)> = data
-        .par_iter()
-        .zip(data_norms.par_iter())
-        .map(|(point, &xn)| {
+    let results: Vec<(usize, f32, f32)> = (0..data.n())
+        .into_par_iter()
+        .map(|i| {
+            let point = data.row(i);
+            let xn = data_norms[i];
             let mut best_dist = f32::MAX;
             let mut second_dist = f32::MAX;
             let mut best_k = 0;
 
             for j in 0..k {
                 let cn = centroid_norms[j];
-                let c_slice = &flat_c[j * d..(j + 1) * d];
+                let c_slice = &flat_c[j * dim..(j + 1) * dim];
                 let dot: f32 = point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
                 let dist = (xn + cn - 2.0 * dot).max(0.0);
                 if dist < best_dist {
@@ -644,7 +644,7 @@ pub(crate) fn assign_expanded_parallel(
         })
         .collect();
 
-    let n = data.len();
+    let n = data.n();
     let mut labels = vec![0usize; n];
     let mut upper = vec![0.0f32; n];
     let mut lower = vec![0.0f32; n];
@@ -661,10 +661,10 @@ pub(crate) fn assign_expanded_parallel(
 /// When the `parallel` feature is enabled, rows are computed in parallel
 /// using rayon (O(n^2/p) with p cores).
 pub(crate) fn pairwise_distance_matrix<D: DistanceMetric>(
-    data: &[Vec<f32>],
+    data: &(impl DataRef + ?Sized),
     metric: &D,
 ) -> Vec<f32> {
-    let n = data.len();
+    let n = data.n();
     let mut dists = vec![0.0f32; n * n];
 
     #[cfg(feature = "parallel")]
@@ -675,7 +675,7 @@ pub(crate) fn pairwise_distance_matrix<D: DistanceMetric>(
             .into_par_iter()
             .map(|i| {
                 ((i + 1)..n)
-                    .map(|j| (j, metric.distance(&data[i], &data[j])))
+                    .map(|j| (j, metric.distance(data.row(i), data.row(j))))
                     .collect()
             })
             .collect();
@@ -690,7 +690,7 @@ pub(crate) fn pairwise_distance_matrix<D: DistanceMetric>(
     #[cfg(not(feature = "parallel"))]
     for i in 0..n {
         for j in (i + 1)..n {
-            let d = metric.distance(&data[i], &data[j]);
+            let d = metric.distance(data.row(i), data.row(j));
             dists[i * n + j] = d;
             dists[j * n + i] = d;
         }

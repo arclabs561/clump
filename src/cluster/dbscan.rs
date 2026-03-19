@@ -59,6 +59,7 @@
 //!   See [`Hdbscan`](super::Hdbscan).
 
 use super::distance::{DistanceMetric, Euclidean};
+use super::flat::DataRef;
 use super::projindex::ProjIndex;
 use super::util;
 use crate::error::{Error, Result};
@@ -155,7 +156,10 @@ impl<D: DistanceMetric> Dbscan<D> {
     }
 
     /// Fit and predict, returning labels where noise is marked as `None`.
-    pub fn fit_predict_with_noise(&self, data: &[Vec<f32>]) -> Result<Vec<Option<usize>>> {
+    pub fn fit_predict_with_noise(
+        &self,
+        data: &(impl DataRef + ?Sized),
+    ) -> Result<Vec<Option<usize>>> {
         let labels = self.fit_predict(data)?;
         Ok(labels
             .into_iter()
@@ -172,11 +176,12 @@ impl<D: DistanceMetric> Dbscan<D> {
     /// Points in the same or adjacent cells are neighbor candidates.
     /// Reduces region_query from O(n) to O(neighbors) amortized for
     /// well-distributed data.
-    fn build_grid(data: &[Vec<f32>], epsilon: f32) -> HashMap<Vec<i64>, Vec<usize>> {
+    fn build_grid(data: &(impl DataRef + ?Sized), epsilon: f32) -> HashMap<Vec<i64>, Vec<usize>> {
         let cell_size = epsilon;
         let mut grid: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
-        for (i, point) in data.iter().enumerate() {
-            let cell: Vec<i64> = point
+        for i in 0..data.n() {
+            let cell: Vec<i64> = data
+                .row(i)
                 .iter()
                 .map(|&x| (x / cell_size).floor() as i64)
                 .collect();
@@ -188,11 +193,11 @@ impl<D: DistanceMetric> Dbscan<D> {
     /// Region query using the grid index. Only checks points in adjacent cells.
     fn region_query_grid(
         &self,
-        data: &[Vec<f32>],
+        data: &(impl DataRef + ?Sized),
         point_idx: usize,
         grid: &HashMap<Vec<i64>, Vec<usize>>,
     ) -> Vec<usize> {
-        let point = &data[point_idx];
+        let point = data.row(point_idx);
         let d = point.len();
         let cell_size = self.epsilon;
         let center_cell: Vec<i64> = point
@@ -206,8 +211,8 @@ impl<D: DistanceMetric> Dbscan<D> {
 
         if d > 8 {
             // Fall back to brute force for high-d.
-            for (j, other) in data.iter().enumerate() {
-                if j != point_idx && self.metric.distance(point, other) <= self.epsilon {
+            for j in 0..data.n() {
+                if j != point_idx && self.metric.distance(point, data.row(j)) <= self.epsilon {
                     neighbors.push(j);
                 }
             }
@@ -224,7 +229,7 @@ impl<D: DistanceMetric> Dbscan<D> {
             }
             if let Some(points) = grid.get(&cell) {
                 for &j in points {
-                    if j != point_idx && self.metric.distance(point, &data[j]) <= self.epsilon {
+                    if j != point_idx && self.metric.distance(point, data.row(j)) <= self.epsilon {
                         neighbors.push(j);
                     }
                 }
@@ -237,7 +242,7 @@ impl<D: DistanceMetric> Dbscan<D> {
     #[allow(clippy::too_many_arguments)]
     fn expand_cluster_grid(
         &self,
-        data: &[Vec<f32>],
+        data: &(impl DataRef + ?Sized),
         point_idx: usize,
         neighbors: &[usize],
         labels: &mut [i32],
@@ -325,25 +330,25 @@ impl<D: DistanceMetric> Dbscan<D> {
     /// Fit and return one cluster label per input point.
     ///
     /// Noise points are labeled with the sentinel `NOISE` (`usize::MAX`).
-    pub fn fit_predict(&self, data: &[Vec<f32>]) -> Result<Vec<usize>> {
-        let n = data.len();
+    pub fn fit_predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
+        let n = data.n();
         if n == 0 {
             return Err(Error::EmptyInput);
         }
 
         // Validate dimensionality.
-        let d = data[0].len();
+        let d = data.d();
         if d == 0 {
             return Err(Error::InvalidParameter {
                 name: "dimension",
                 message: "must be at least 1",
             });
         }
-        for point in data.iter().skip(1) {
-            if point.len() != d {
+        for i in 1..n {
+            if data.row(i).len() != d {
                 return Err(Error::DimensionMismatch {
                     expected: d,
-                    found: point.len(),
+                    found: data.row(i).len(),
                 });
             }
         }
@@ -437,7 +442,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                 }
                 visited[point_idx] = true;
 
-                let mut neighbors = proj.range_query(&data[point_idx], self.epsilon);
+                let mut neighbors = proj.range_query(data.row(point_idx), self.epsilon);
                 neighbors.retain(|&j| j != point_idx);
 
                 if neighbors.len() + 1 < self.min_pts {
@@ -458,7 +463,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                     }
                     visited[neighbor_idx] = true;
 
-                    let mut nn = proj.range_query(&data[neighbor_idx], self.epsilon);
+                    let mut nn = proj.range_query(data.row(neighbor_idx), self.epsilon);
                     nn.retain(|&j| j != neighbor_idx);
                     if nn.len() + 1 >= self.min_pts {
                         for idx in nn {
