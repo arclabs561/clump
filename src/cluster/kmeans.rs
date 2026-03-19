@@ -432,7 +432,18 @@ impl<D: DistanceMetric> Kmeans<D> {
                 }
 
                 #[cfg(not(feature = "parallel"))]
-                {
+                if self.k <= 20 {
+                    // Geometric assign: bound-free, O(k^2) centroid-pair check.
+                    // Better than Hamerly for small k (no per-point bound overhead).
+                    util::geometric_assign(
+                        data,
+                        &centroids,
+                        &mut labels,
+                        &centroid_shifts,
+                        &self.metric,
+                        iter == 0,
+                    );
+                } else {
                     util::hamerly_assign(
                         data,
                         &centroids,
