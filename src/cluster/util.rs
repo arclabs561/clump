@@ -679,6 +679,115 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
     recomputed
 }
 
+/// Precompute squared norms for each vector.
+pub(crate) fn squared_norms(data: &[Vec<f32>]) -> Vec<f32> {
+    data.iter()
+        .map(|v| v.iter().map(|&x| x * x).sum())
+        .collect()
+}
+
+/// Assign each point to nearest centroid using expanded squared Euclidean:
+/// `||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c`
+///
+/// Returns (labels, upper_bounds, lower_bounds) where upper_bounds[i] is the
+/// squared distance from point i to its assigned centroid, and lower_bounds[i]
+/// is the distance to the second-nearest centroid.
+pub(crate) fn assign_expanded(
+    data: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    data_norms: &[f32],
+    centroid_norms: &[f32],
+) -> (Vec<usize>, Vec<f32>, Vec<f32>) {
+    let n = data.len();
+    let k = centroids.len();
+    let d = if k > 0 { centroids[0].len() } else { 0 };
+
+    let mut labels = vec![0usize; n];
+    let mut upper = vec![f32::MAX; n];
+    let mut lower = vec![f32::MAX; n];
+
+    // Flatten centroids for cache-friendly access.
+    let flat_c: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
+
+    for i in 0..n {
+        let xn = data_norms[i];
+        let mut best_dist = f32::MAX;
+        let mut second_dist = f32::MAX;
+        let mut best_k = 0;
+
+        for j in 0..k {
+            let cn = centroid_norms[j];
+            let c_slice = &flat_c[j * d..(j + 1) * d];
+            let dot: f32 = data[i].iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
+            let dist = (xn + cn - 2.0 * dot).max(0.0);
+            if dist < best_dist {
+                second_dist = best_dist;
+                best_dist = dist;
+                best_k = j;
+            } else if dist < second_dist {
+                second_dist = dist;
+            }
+        }
+        labels[i] = best_k;
+        upper[i] = best_dist;
+        lower[i] = second_dist;
+    }
+
+    (labels, upper, lower)
+}
+
+/// Parallel version of [`assign_expanded`].
+#[cfg(feature = "parallel")]
+pub(crate) fn assign_expanded_parallel(
+    data: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    data_norms: &[f32],
+    centroid_norms: &[f32],
+) -> (Vec<usize>, Vec<f32>, Vec<f32>) {
+    use rayon::prelude::*;
+
+    let k = centroids.len();
+    let d = if k > 0 { centroids[0].len() } else { 0 };
+
+    let flat_c: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
+
+    let results: Vec<(usize, f32, f32)> = data
+        .par_iter()
+        .zip(data_norms.par_iter())
+        .map(|(point, &xn)| {
+            let mut best_dist = f32::MAX;
+            let mut second_dist = f32::MAX;
+            let mut best_k = 0;
+
+            for j in 0..k {
+                let cn = centroid_norms[j];
+                let c_slice = &flat_c[j * d..(j + 1) * d];
+                let dot: f32 = point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
+                let dist = (xn + cn - 2.0 * dot).max(0.0);
+                if dist < best_dist {
+                    second_dist = best_dist;
+                    best_dist = dist;
+                    best_k = j;
+                } else if dist < second_dist {
+                    second_dist = dist;
+                }
+            }
+            (best_k, best_dist, second_dist)
+        })
+        .collect();
+
+    let n = data.len();
+    let mut labels = vec![0usize; n];
+    let mut upper = vec![0.0f32; n];
+    let mut lower = vec![0.0f32; n];
+    for (i, (lbl, u, l)) in results.into_iter().enumerate() {
+        labels[i] = lbl;
+        upper[i] = u;
+        lower[i] = l;
+    }
+    (labels, upper, lower)
+}
+
 /// Compute pairwise distance matrix for n points. Returns flat n*n row-major vec.
 ///
 /// When the `parallel` feature is enabled, rows are computed in parallel

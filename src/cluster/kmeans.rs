@@ -343,8 +343,14 @@ impl<D: DistanceMetric> Kmeans<D> {
         let mut flat_buf: Vec<f32> = Vec::with_capacity(self.k * d);
         let mut inertia_trace: Vec<f32> = Vec::with_capacity(self.max_iter);
 
-        // (Expanded squared Euclidean removed -- Hamerly bounds are used
-        // for both parallel and sequential paths.)
+        // Precompute squared norms for expanded-form first-iteration assignment.
+        // Only valid for SquaredEuclidean (||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c).
+        let use_expanded = self.metric.supports_expanded_form();
+        let data_norms: Vec<f32> = if use_expanded {
+            util::squared_norms(data)
+        } else {
+            Vec::new()
+        };
 
         // GPU acceleration: initialize Metal compute pipeline for assignment
         // when using SquaredEuclidean and problem is large enough to amortize
@@ -422,47 +428,73 @@ impl<D: DistanceMetric> Kmeans<D> {
             let gpu_used = blas_used; // skip Hamerly if BLAS handled it
 
             if !gpu_used {
-                // Hamerly bounds-based assignment: skips distance computation
-                // for points whose assignment provably cannot change.
-                #[cfg(feature = "parallel")]
-                {
-                    util::hamerly_assign_parallel(
+                // First iteration with expanded squared Euclidean: replace
+                // brute-force distance loops with dot-product + precomputed norms.
+                // ||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c avoids per-element
+                // subtraction and squaring; the dot product is more SIMD-friendly.
+                let expanded_used = if iter == 0 && use_expanded {
+                    let centroid_norms = util::squared_norms(&centroids);
+                    #[cfg(feature = "parallel")]
+                    let (new_labels, new_upper, new_lower) = util::assign_expanded_parallel(
                         data,
                         &centroids,
-                        &mut labels,
-                        &mut upper_bounds,
-                        &mut lower_bounds,
-                        &centroid_shifts,
-                        &self.metric,
-                        iter == 0,
-                        &mut flat_buf,
+                        &data_norms,
+                        &centroid_norms,
                     );
-                }
-
-                #[cfg(not(feature = "parallel"))]
-                if self.k <= 20 {
-                    // Geometric assign: bound-free, O(k^2) centroid-pair check.
-                    // Better than Hamerly for small k (no per-point bound overhead).
-                    util::geometric_assign(
-                        data,
-                        &centroids,
-                        &mut labels,
-                        &centroid_shifts,
-                        &self.metric,
-                        iter == 0,
-                    );
+                    #[cfg(not(feature = "parallel"))]
+                    let (new_labels, new_upper, new_lower) =
+                        util::assign_expanded(data, &centroids, &data_norms, &centroid_norms);
+                    labels.copy_from_slice(&new_labels);
+                    upper_bounds.copy_from_slice(&new_upper);
+                    lower_bounds.copy_from_slice(&new_lower);
+                    true
                 } else {
-                    util::hamerly_assign(
-                        data,
-                        &centroids,
-                        &mut labels,
-                        &mut upper_bounds,
-                        &mut lower_bounds,
-                        &centroid_shifts,
-                        &self.metric,
-                        iter == 0,
-                        &mut flat_buf,
-                    );
+                    false
+                };
+
+                if !expanded_used {
+                    // Hamerly bounds-based assignment: skips distance computation
+                    // for points whose assignment provably cannot change.
+                    #[cfg(feature = "parallel")]
+                    {
+                        util::hamerly_assign_parallel(
+                            data,
+                            &centroids,
+                            &mut labels,
+                            &mut upper_bounds,
+                            &mut lower_bounds,
+                            &centroid_shifts,
+                            &self.metric,
+                            iter == 0,
+                            &mut flat_buf,
+                        );
+                    }
+
+                    #[cfg(not(feature = "parallel"))]
+                    if self.k <= 20 {
+                        // Geometric assign: bound-free, O(k^2) centroid-pair check.
+                        // Better than Hamerly for small k (no per-point bound overhead).
+                        util::geometric_assign(
+                            data,
+                            &centroids,
+                            &mut labels,
+                            &centroid_shifts,
+                            &self.metric,
+                            iter == 0,
+                        );
+                    } else {
+                        util::hamerly_assign(
+                            data,
+                            &centroids,
+                            &mut labels,
+                            &mut upper_bounds,
+                            &mut lower_bounds,
+                            &centroid_shifts,
+                            &self.metric,
+                            iter == 0,
+                            &mut flat_buf,
+                        );
+                    }
                 }
             }
 
