@@ -397,7 +397,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             #[cfg(feature = "blas")]
             let blas_used = if iter == 0 && use_blas {
                 if let Some((ref fd, ref xn)) = blas_data {
-                    let fc = super::flat::FlatMatrix::from_vecs(&centroids);
+                    let fc = super::flat::FlatMatrix::from_data(&centroids);
                     let cn = fc.row_norms_sq();
                     let (new_labels, new_upper) = fd.blas_assign(&fc, xn, &cn);
                     labels.copy_from_slice(&new_labels);

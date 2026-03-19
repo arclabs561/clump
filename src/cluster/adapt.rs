@@ -1,5 +1,4 @@
-//! Adapters for converting between clump's `&[Vec<f32>]` input format
-//! and other Rust data structures.
+//! Adapters for converting external data to clump's [`DataRef`](super::flat::DataRef) input.
 
 /// Convert an ndarray `Array2<f32>` to clump's input format.
 ///

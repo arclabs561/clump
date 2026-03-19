@@ -315,6 +315,84 @@ proptest! {
     }
 }
 
+proptest! {
+    /// FlatRef produces identical results to Vec<Vec<f32>> (DataRef equivalence).
+    #[test]
+    fn flatref_matches_vec_vec(data in arb_data(20, 4)) {
+        let k = 2.min(data.len());
+        // Vec<Vec<f32>> path
+        let labels_vv = Kmeans::new(k).with_seed(42).with_max_iter(5)
+            .fit_predict(&data).unwrap();
+        // FlatRef path
+        let flat: Vec<f32> = data.iter().flat_map(|v| v.iter().copied()).collect();
+        let d = data[0].len();
+        let fref = FlatRef::new(&flat, data.len(), d);
+        let labels_fr = Kmeans::new(k).with_seed(42).with_max_iter(5)
+            .fit_predict(&fref).unwrap();
+        prop_assert_eq!(labels_vv, labels_fr,
+            "FlatRef and Vec<Vec<f32>> must produce identical k-means labels");
+    }
+
+    /// FlatRef DBSCAN matches Vec<Vec<f32>> DBSCAN.
+    #[test]
+    fn flatref_dbscan_matches(data in arb_data(15, 3)) {
+        let labels_vv = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+        let flat: Vec<f32> = data.iter().flat_map(|v| v.iter().copied()).collect();
+        let fref = FlatRef::new(&flat, data.len(), data[0].len());
+        let labels_fr = Dbscan::new(1.0, 2).fit_predict(&fref).unwrap();
+        prop_assert_eq!(labels_vv, labels_fr,
+            "FlatRef and Vec<Vec<f32>> must produce identical DBSCAN labels");
+    }
+
+    /// DenStream decay is consistent: decayed weight matches threshold expectations.
+    /// After t_p updates at a location, the weight should be above the potential
+    /// threshold (no spurious pruning of active clusters).
+    #[test]
+    fn denstream_active_cluster_survives(n in 5usize..30) {
+        let mut ds = DenStream::new(2.0, 2)
+            .with_beta(0.5)
+            .with_lambda(0.01)
+            .with_mu(1.0)
+            .with_pruning_period(100);
+        for _ in 0..n {
+            ds.update(&[0.0, 0.0]).unwrap();
+        }
+        // An actively fed cluster should always be present.
+        prop_assert!(ds.n_clusters() >= 1,
+            "actively fed cluster should survive, got {} clusters after {} points",
+            ds.n_clusters(), n);
+    }
+
+    /// Correlation clustering cost never increases with local search.
+    #[test]
+    fn correlation_local_search_monotone(n in 3usize..10) {
+        let mut edges = Vec::new();
+        for i in 0..n {
+            for j in (i+1)..n {
+                let w = ((i * 7 + j * 13) % 20) as f32 - 10.0;
+                edges.push(SignedEdge { i, j, weight: w });
+            }
+        }
+        let pivot_only = CorrelationClustering::new()
+            .with_max_iter(0).with_seed(42)
+            .fit(n, &edges).unwrap();
+        let with_search = CorrelationClustering::new()
+            .with_max_iter(100).with_seed(42)
+            .fit(n, &edges).unwrap();
+        prop_assert!(with_search.cost <= pivot_only.cost + 1e-9,
+            "local search increased cost: {} -> {}", pivot_only.cost, with_search.cost);
+    }
+}
+
+/// Metrics reject NaN in debug mode.
+#[test]
+#[should_panic(expected = "not finite")]
+fn metrics_reject_nan() {
+    let data = vec![vec![0.0, f32::NAN], vec![1.0, 1.0]];
+    let labels = vec![0, 1];
+    cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
+}
+
 #[cfg(feature = "parallel")]
 mod parallel_tests {
     use clump::*;

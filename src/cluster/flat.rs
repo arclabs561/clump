@@ -1,12 +1,12 @@
-//! Flat contiguous matrix for cache-friendly row access.
+//! [`DataRef`] trait and contiguous matrix layouts.
 //!
-//! Wraps a `Vec<f32>` with row-major layout and stride `d`.
-//! Eliminates `Vec<Vec<f32>>` pointer indirection in hot loops.
+//! [`DataRef`] abstracts over input data so algorithms accept both
+//! `Vec<Vec<f32>>` and [`FlatRef`] (zero-copy flat buffer).
 
 /// Trait for read-only access to a 2D dataset of `f32` rows.
 ///
 /// Implemented for `[Vec<f32>]` (so `&Vec<Vec<f32>>` works via auto-deref)
-/// and for [`FlatMatrix`] (zero-copy flat buffer input).
+/// and for [`FlatRef`] (zero-copy flat buffer input).
 pub trait DataRef: Sync {
     /// Number of rows (data points).
     fn n(&self) -> usize;

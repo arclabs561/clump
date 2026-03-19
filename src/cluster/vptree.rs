@@ -9,6 +9,7 @@
 //! neighbor queries) to avoid O(n^2) pairwise distance computation.
 
 use super::distance::DistanceMetric;
+use super::flat::DataRef;
 use rand::prelude::*;
 
 /// A node in the VP-tree.
@@ -24,29 +25,24 @@ struct VpNode {
 }
 
 /// Vantage-point tree for O(log n) distance-based queries.
-pub(crate) struct VpTree<'a, D: DistanceMetric> {
+pub(crate) struct VpTree<'a, D: DistanceMetric, T: DataRef + ?Sized> {
     root: Option<Box<VpNode>>,
-    data: &'a [Vec<f32>],
+    data: &'a T,
     metric: &'a D,
 }
 
 #[allow(dead_code)]
-impl<'a, D: DistanceMetric> VpTree<'a, D> {
+impl<'a, D: DistanceMetric, T: DataRef + ?Sized> VpTree<'a, D, T> {
     /// Build a VP-tree from the given data. O(n log n) average.
-    pub(crate) fn new(data: &'a [Vec<f32>], metric: &'a D) -> Self {
-        let n = data.len();
+    pub(crate) fn new(data: &'a T, metric: &'a D) -> Self {
+        let n = data.n();
         let mut indices: Vec<usize> = (0..n).collect();
         let mut rng = StdRng::seed_from_u64(42);
         let root = Self::build(&mut indices, data, metric, &mut rng);
         Self { root, data, metric }
     }
 
-    fn build(
-        indices: &mut [usize],
-        data: &[Vec<f32>],
-        metric: &D,
-        rng: &mut StdRng,
-    ) -> Option<Box<VpNode>> {
+    fn build(indices: &mut [usize], data: &T, metric: &D, rng: &mut StdRng) -> Option<Box<VpNode>> {
         if indices.is_empty() {
             return None;
         }
@@ -68,7 +64,7 @@ impl<'a, D: DistanceMetric> VpTree<'a, D> {
         let rest = &mut indices[1..];
         let mut dists: Vec<(usize, f32)> = rest
             .iter()
-            .map(|&i| (i, metric.distance(&data[vp_idx], &data[i])))
+            .map(|&i| (i, metric.distance(data.row(vp_idx), data.row(i))))
             .collect();
 
         // Find median distance.
@@ -109,7 +105,7 @@ impl<'a, D: DistanceMetric> VpTree<'a, D> {
     }
 
     fn range_search(&self, node: &VpNode, query: &[f32], radius: f32, results: &mut Vec<usize>) {
-        let dist = self.metric.distance(query, &self.data[node.point_idx]);
+        let dist = self.metric.distance(query, self.data.row(node.point_idx));
 
         if dist <= radius {
             results.push(node.point_idx);
@@ -152,7 +148,7 @@ impl<'a, D: DistanceMetric> VpTree<'a, D> {
         heap: &mut Vec<(usize, f32)>,
         tau: &mut f32,
     ) {
-        let dist = self.metric.distance(query, &self.data[node.point_idx]);
+        let dist = self.metric.distance(query, self.data.row(node.point_idx));
 
         if heap.len() < k {
             heap.push((node.point_idx, dist));

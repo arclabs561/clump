@@ -132,7 +132,8 @@ impl MicroCluster {
     fn apply_decay(&mut self, decay_factor: f64, timestamp: u64) {
         let elapsed = timestamp.saturating_sub(self.last_update);
         if elapsed > 0 {
-            let decay = (-decay_factor * elapsed as f64).exp() as f32;
+            // Base-2 decay to match the outlier threshold formula (Cao et al. 2006).
+            let decay = 2.0_f64.powf(-decay_factor * elapsed as f64) as f32;
             self.weight *= decay as f64;
             for l in &mut self.ls {
                 *l *= decay;
