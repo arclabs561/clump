@@ -409,7 +409,7 @@ impl<D: DistanceMetric> CopKmeans<D> {
                 s.fill(0.0);
             }
             for (i, label) in labels.iter().enumerate() {
-                let k = label.unwrap();
+                let k = label.expect("constrained_assign guarantees all labels are Some");
                 for j in 0..d {
                     sums_f64[k][j] += data[i][j] as f64;
                 }
@@ -461,7 +461,10 @@ impl<D: DistanceMetric> CopKmeans<D> {
         let labels =
             self.constrained_assign(data, &centroids, &must_links, &cannot_links, &order)?;
 
-        Ok(labels.into_iter().map(|l| l.unwrap()).collect())
+        Ok(labels
+            .into_iter()
+            .map(|l| l.expect("final constrained_assign guarantees all labels are Some"))
+            .collect())
     }
 }
 
