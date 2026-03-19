@@ -338,6 +338,33 @@ pub fn silhouette_score_noise_aware<D: DistanceMetric>(
     (total / non_noise_indices.len() as f64) as f32
 }
 
+/// K-distance curve for DBSCAN epsilon selection.
+///
+/// Computes the distance to each point's k-th nearest neighbor, sorted in
+/// ascending order. The "elbow" (sharpest increase) suggests a good epsilon
+/// value for DBSCAN.
+///
+/// `k` should typically be `min_pts - 1` (same parameter you'd use for DBSCAN).
+///
+/// Returns a sorted vector of k-th nearest neighbor distances.
+pub fn k_distance<D: DistanceMetric>(data: &[Vec<f32>], k: usize, metric: &D) -> Vec<f32> {
+    let n = data.len();
+    let k = k.min(n.saturating_sub(1)).max(1);
+    let mut k_dists = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let mut dists: Vec<f32> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| metric.distance(&data[i], &data[j]))
+            .collect();
+        dists.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+        k_dists.push(dists[k - 1]);
+    }
+
+    k_dists.sort_by(|a, b| a.total_cmp(b));
+    k_dists
+}
+
 /// Noise ratio: fraction of points labeled as noise.
 ///
 /// Useful as a companion metric for density-based clustering.
@@ -442,6 +469,26 @@ mod tests {
         let labels = vec![noise, noise, noise];
         let score = silhouette_score_noise_aware(&data, &labels, &Euclidean);
         assert!(score.abs() < 0.01, "all noise should give ~0");
+    }
+
+    #[test]
+    fn k_distance_sorted() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.2, 0.0],
+            vec![10.0, 0.0],
+        ];
+        let kd = k_distance(&data, 1, &Euclidean);
+        assert_eq!(kd.len(), 4);
+        // Must be sorted ascending.
+        for w in kd.windows(2) {
+            assert!(w[0] <= w[1], "k-distance must be sorted");
+        }
+        // First value should be small (nearest neighbor of closest pair).
+        assert!(kd[0] < 0.2);
+        // Last value should be large (the outlier at 10.0).
+        assert!(kd[3] > 5.0);
     }
 
     #[test]
