@@ -362,11 +362,10 @@ fn core_distances(dists: &[f32], n: usize, min_samples: usize) -> Vec<f32> {
     #[cfg(not(feature = "parallel"))]
     {
         let mut core = Vec::with_capacity(n);
+        let mut row = Vec::with_capacity(n.saturating_sub(1));
         for i in 0..n {
-            let mut row: Vec<f32> = (0..n)
-                .filter(|&j| j != i)
-                .map(|j| dists[i * n + j])
-                .collect();
+            row.clear();
+            row.extend((0..n).filter(|&j| j != i).map(|j| dists[i * n + j]));
             row.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
             core.push(row[k - 1]);
         }

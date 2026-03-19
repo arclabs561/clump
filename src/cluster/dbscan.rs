@@ -54,8 +54,8 @@
 //!
 //! - **Parameter Sensitivity**: Epsilon is hard to set. K-distance plots help.
 //! - **HDBSCAN***: A hierarchical extension that removes the epsilon parameter
-//!   by building a stability-based cluster hierarchy. This is the modern
-//!   default for density clustering (Campello et al., 2013).
+//!   by building a stability-based cluster hierarchy. This is the standard
+//!   successor for density clustering (Campello et al., 2013).
 //!   See [`Hdbscan`](super::Hdbscan).
 
 use super::distance::{DistanceMetric, Euclidean};
