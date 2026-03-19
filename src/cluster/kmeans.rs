@@ -351,13 +351,10 @@ impl<D: DistanceMetric> Kmeans<D> {
             None
         };
 
-        // Flat data and precomputed norms available for future GEMM path.
-        let _flat_data = if n * d >= 10_000 && self.metric.supports_expanded_form() {
-            Some(super::flat::FlatMatrix::from_vecs(data))
-        } else {
-            None
-        };
-        let _x_norms = _flat_data.as_ref().map(|f| f.row_norms_sq());
+        // Note: manual tiled GEMM was benchmarked for first-iteration
+        // assignment and was 50% slower than Hamerly's per-point loop.
+        // Real BLAS GEMM (matrixmultiply/OpenBLAS) needed for a win.
+        // Infrastructure in flat.rs is ready for when BLAS is added.
 
         let mut iters = 0usize;
         for iter in 0..self.max_iter {
@@ -386,7 +383,6 @@ impl<D: DistanceMetric> Kmeans<D> {
             if !gpu_used {
                 // Hamerly bounds-based assignment: skips distance computation
                 // for points whose assignment provably cannot change.
-                // Parallel-safe: each point's bounds are independent.
                 #[cfg(feature = "parallel")]
                 {
                     util::hamerly_assign_parallel(
