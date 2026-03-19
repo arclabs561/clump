@@ -97,7 +97,9 @@ When optimizing: always benchmark before AND after. Reject changes that don't pr
 
 ## Performance comparison table
 
-Measured on Apple Silicon, single-threaded unless noted. All times in ms.
+Measured on Apple M-series, single-threaded unless noted. All times are
+criterion median (ms). Criterion config: 5s warm-up, 5s measurement, 100
+samples. linfa pinned at 0.8.1 (dev-deps). rustc stable.
 
 | Benchmark | clump (default) | clump (parallel) | clump (simd+par+blas) | linfa-clustering | sklearn (est.) |
 |-----------|----------------|-----------------|----------------------|-----------------|---------------|
@@ -111,3 +113,5 @@ Measured on Apple Silicon, single-threaded unless noted. All times in ms.
 
 sklearn estimates are rough (different hardware, f64, includes setup overhead).
 clump is 5.7x faster than linfa on k-means, 3.2x on DBSCAN at n=1000.
+
+To reproduce: `cargo bench` (default features) or `cargo bench --features simd,parallel,blas`.
