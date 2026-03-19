@@ -115,8 +115,13 @@ impl DistanceMetric for CosineDistance {
 
 /// Inner product distance: `-dot(a, b)`.
 ///
-/// Useful when vectors are normalized and you want to maximize similarity.
-/// Note: this can be negative (for vectors pointing in the same direction).
+/// **Warning**: This metric returns negative values for co-directional vectors,
+/// violating the non-negativity requirement of `DistanceMetric`. It is intended
+/// for use with pre-normalized (unit-length) vectors where the range is `[-1, 1]`.
+///
+/// Hamerly bounds and k-means++ initialization clamp negative distances to 0,
+/// so k-means will work but may have reduced initialization quality. DBSCAN and
+/// HDBSCAN will treat all points as within epsilon of each other if epsilon > 0.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InnerProductDistance;
 
