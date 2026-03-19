@@ -438,14 +438,17 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     centroid_shifts: &[f32],
     metric: &D,
     first_iter: bool,
+    flat_buf: &mut Vec<f32>,
 ) {
     use rayon::prelude::*;
     let n = data.len();
     let k = centroids.len();
     let d = if k > 0 { centroids[0].len() } else { 0 };
 
-    // Flatten centroids for cache-friendly parallel access.
-    let flat_centroids: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
+    // Reuse caller-provided buffer for cache-friendly parallel access.
+    flat_buf.clear();
+    flat_buf.extend(centroids.iter().flat_map(|c| c.iter().copied()));
+    let flat_centroids = &*flat_buf;
 
     if first_iter || k <= 1 {
         let results: Vec<(usize, f32, f32)> = (0..n)
@@ -559,21 +562,22 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
     centroid_shifts: &[f32],
     metric: &D,
     first_iter: bool,
+    flat_buf: &mut Vec<f32>,
 ) -> usize {
     let n = data.len();
     let k = centroids.len();
     let d = if k > 0 { centroids[0].len() } else { 0 };
     let mut recomputed = 0;
 
-    // Flatten centroids to contiguous memory for cache-friendly access.
+    // Reuse caller-provided buffer for cache-friendly access.
     // Only worth the copy overhead when k is large enough that cache misses
     // from Vec<Vec<f32>> pointer chasing dominate.
     let use_flat = k >= 16;
-    let flat_centroids: Vec<f32> = if use_flat {
-        centroids.iter().flat_map(|c| c.iter().copied()).collect()
-    } else {
-        Vec::new()
-    };
+    flat_buf.clear();
+    if use_flat {
+        flat_buf.extend(centroids.iter().flat_map(|c| c.iter().copied()));
+    }
+    let flat_centroids = &*flat_buf;
 
     let batch_dist = |point: &[f32], centroid_idx: usize| -> f32 {
         if use_flat {
@@ -793,7 +797,7 @@ pub(crate) fn prim_mst(
             // Find global min.
             next_u = usize::MAX;
             let mut next_best = f32::INFINITY;
-            for &(v, val, _) in &results {
+            for &(v, _val, _) in &results {
                 if v != usize::MAX && best[v] < next_best {
                     next_best = best[v];
                     next_u = v;
