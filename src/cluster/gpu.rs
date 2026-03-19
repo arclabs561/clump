@@ -161,7 +161,7 @@ impl GpuAssigner {
     }
 }
 
-/// Flatten `&[Vec<f32>]` into a contiguous row-major `Vec<f32>`.
+/// Flatten a `DataRef` into a contiguous row-major `Vec<f32>`.
 #[cfg(feature = "gpu")]
 pub(crate) fn flatten(data: &(impl super::flat::DataRef + ?Sized)) -> Vec<f32> {
     let n = data.n();

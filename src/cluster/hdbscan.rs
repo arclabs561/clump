@@ -135,153 +135,94 @@ impl Default for Hdbscan<Euclidean> {
     }
 }
 
+/// Validate inputs and build the sorted MST. Shared by `fit_predict` and `fit`.
+fn build_mst<D: DistanceMetric>(
+    data: &(impl DataRef + ?Sized),
+    metric: &D,
+    min_samples: usize,
+    min_cluster_size: usize,
+) -> Result<Vec<(usize, usize, f32)>> {
+    let n = data.n();
+    if n == 0 {
+        return Err(Error::EmptyInput);
+    }
+    if min_samples == 0 {
+        return Err(Error::InvalidParameter {
+            name: "min_samples",
+            message: "must be at least 1",
+        });
+    }
+    if min_cluster_size < 2 {
+        return Err(Error::InvalidParameter {
+            name: "min_cluster_size",
+            message: "must be at least 2",
+        });
+    }
+    let d = data.d();
+    if d == 0 {
+        return Err(Error::InvalidParameter {
+            name: "dimension",
+            message: "must be at least 1",
+        });
+    }
+    for i in 1..n {
+        if data.row(i).len() != d {
+            return Err(Error::DimensionMismatch {
+                expected: d,
+                found: data.row(i).len(),
+            });
+        }
+    }
+    util::validate_finite(data)?;
+
+    const MAX_MATRIX_BYTES: usize = 1024 * 1024 * 1024;
+    let use_matrix = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
+
+    let (_core_dists, mst) = if use_matrix {
+        let dists = util::pairwise_distance_matrix(data, metric);
+        let cd = core_distances(&dists, n, min_samples);
+        let mst = util::prim_mst(n, |i, j| {
+            mutual_reachability(dists[i * n + j], cd[i], cd[j])
+        });
+        (cd, mst)
+    } else {
+        let vecs: Vec<Vec<f32>> = (0..n).map(|i| data.row(i).to_vec()).collect();
+        let cd = core_distances_vptree(&vecs, metric, min_samples);
+        let mst = util::prim_mst(n, |i, j| {
+            let d = metric.distance(data.row(i), data.row(j));
+            mutual_reachability(d, cd[i], cd[j])
+        });
+        (cd, mst)
+    };
+
+    let mut mst = mst;
+    mst.sort_by(|a, b| a.2.total_cmp(&b.2));
+    Ok(mst)
+}
+
 impl<D: DistanceMetric> Hdbscan<D> {
     /// Fit and return one cluster label per input point.
     ///
     /// Noise points are labeled with `NOISE` (`usize::MAX`).
     pub fn fit_predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
-        let n = data.n();
-        if n == 0 {
-            return Err(Error::EmptyInput);
-        }
-
-        if self.min_samples == 0 {
-            return Err(Error::InvalidParameter {
-                name: "min_samples",
-                message: "must be at least 1",
-            });
-        }
-
-        if self.min_cluster_size < 2 {
-            return Err(Error::InvalidParameter {
-                name: "min_cluster_size",
-                message: "must be at least 2",
-            });
-        }
-
-        let d = data.d();
-        if d == 0 {
-            return Err(Error::InvalidParameter {
-                name: "dimension",
-                message: "must be at least 1",
-            });
-        }
-        for i in 1..n {
-            if data.row(i).len() != d {
-                return Err(Error::DimensionMismatch {
-                    expected: d,
-                    found: data.row(i).len(),
-                });
-            }
-        }
-
-        util::validate_finite(data)?;
-
-        // For moderate n, precompute the full distance matrix (fast lookups).
-        // For large n (matrix > 512MB), compute distances on-demand to avoid
-        // OOM. The on-demand path recomputes each distance ~2x (once for
-        // core distances, once for MST) but uses O(n) memory.
-        const MAX_MATRIX_BYTES: usize = 1024 * 1024 * 1024;
-        let use_matrix = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
-
-        let (_core_dists, mst) = if use_matrix {
-            let dists = util::pairwise_distance_matrix(data, &self.metric);
-            let cd = core_distances(&dists, n, self.min_samples);
-            let mst = util::prim_mst(n, |i, j| {
-                mutual_reachability(dists[i * n + j], cd[i], cd[j])
-            });
-            (cd, mst)
-        } else {
-            // VP-tree: O(n log n) core distance computation via kNN queries.
-            let vecs: Vec<Vec<f32>> = (0..n).map(|i| data.row(i).to_vec()).collect();
-            let cd = core_distances_vptree(&vecs, &self.metric, self.min_samples);
-            let metric = &self.metric;
-            let mst = util::prim_mst(n, |i, j| {
-                let d = metric.distance(data.row(i), data.row(j));
-                mutual_reachability(d, cd[i], cd[j])
-            });
-            (cd, mst)
-        };
-
-        let mut mst = mst;
-        mst.sort_by(|a, b| a.2.total_cmp(&b.2));
-
-        let labels = extract_clusters(&mst, n, self.min_cluster_size);
+        let mst = build_mst(data, &self.metric, self.min_samples, self.min_cluster_size)?;
+        let (labels, _) = extract_clusters(&mst, data.n(), self.min_cluster_size);
         Ok(labels)
     }
 
     /// Fit and return labels with outlier scores.
     ///
-    /// Outlier scores are based on GLOSH (Global-Local Outlier Score from
-    /// Hierarchies). Each point's score is its distance to the nearest core
-    /// point, normalized by the cluster's maximum core distance. Score in
-    /// [0, 1]; higher = more outlier-like.
+    /// Outlier scores use GLOSH (Global-Local Outlier Score from Hierarchies,
+    /// Campello et al. 2015). For each point p in selected cluster c:
+    ///
+    /// `GLOSH(p) = 1 - (lambda_p / lambda_max(c))`
+    ///
+    /// where `lambda_p` is the 1/distance at which p fell out of the condensed
+    /// tree and `lambda_max(c)` is the maximum such value in cluster c.
+    /// Noise points get score 1.0. Score in [0, 1]; higher = more outlier-like.
     pub fn fit(&self, data: &(impl DataRef + ?Sized)) -> Result<HdbscanResult> {
-        let labels = self.fit_predict(data)?;
-        let n = data.n();
-
-        // Compute outlier scores: for each point, the distance to its
-        // nearest neighbor normalized by the cluster's maximum distance.
-        // Noise points get score 1.0; cluster members get score based on
-        // how peripheral they are.
-        let mut outlier_scores = vec![1.0f32; n];
-        let k = labels
-            .iter()
-            .filter(|&&l| l != NOISE)
-            .copied()
-            .max()
-            .unwrap_or(0)
-            + 1;
-
-        if k > 0 {
-            // Find max intra-cluster distance for each cluster.
-            let mut cluster_max_dist = vec![0.0f32; k];
-            let mut cluster_centroids: Vec<Vec<f64>> = vec![vec![0.0f64; data.d()]; k];
-            let mut cluster_sizes = vec![0usize; k];
-
-            for (i, &label) in labels.iter().enumerate() {
-                if label != NOISE {
-                    cluster_sizes[label] += 1;
-                    for (j, &x) in data.row(i).iter().enumerate() {
-                        cluster_centroids[label][j] += x as f64;
-                    }
-                }
-            }
-            for c in 0..k {
-                if cluster_sizes[c] > 0 {
-                    for x in &mut cluster_centroids[c] {
-                        *x /= cluster_sizes[c] as f64;
-                    }
-                }
-            }
-
-            // Compute distances to cluster centroid.
-            for (i, &label) in labels.iter().enumerate() {
-                if label == NOISE {
-                    continue;
-                }
-                let centroid_f32: Vec<f32> =
-                    cluster_centroids[label].iter().map(|&x| x as f32).collect();
-                let dist = self.metric.distance(data.row(i), &centroid_f32);
-                if dist > cluster_max_dist[label] {
-                    cluster_max_dist[label] = dist;
-                }
-            }
-
-            for (i, &label) in labels.iter().enumerate() {
-                if label == NOISE {
-                    outlier_scores[i] = 1.0;
-                } else if cluster_max_dist[label] > f32::EPSILON {
-                    let centroid_f32: Vec<f32> =
-                        cluster_centroids[label].iter().map(|&x| x as f32).collect();
-                    let dist = self.metric.distance(data.row(i), &centroid_f32);
-                    outlier_scores[i] = dist / cluster_max_dist[label];
-                } else {
-                    outlier_scores[i] = 0.0;
-                }
-            }
-        }
-
+        let mst = build_mst(data, &self.metric, self.min_samples, self.min_cluster_size)?;
+        let (labels, outlier_scores) = extract_clusters(&mst, data.n(), self.min_cluster_size);
         Ok(HdbscanResult {
             labels,
             outlier_scores,
@@ -295,7 +236,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
 pub struct HdbscanResult {
     /// Cluster label for each point. Noise points have label `NOISE` (`usize::MAX`).
     pub labels: Vec<usize>,
-    /// Outlier score for each point in [0, 1]. Higher = more outlier-like.
+    /// GLOSH outlier score for each point in [0, 1]. Higher = more outlier-like.
     /// Noise points have score 1.0.
     pub outlier_scores: Vec<f32>,
 }
@@ -399,9 +340,17 @@ struct CondensedEdge {
     child_size: usize,
 }
 
-fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usize) -> Vec<usize> {
+/// Extract clusters from the MST and compute GLOSH outlier scores.
+///
+/// Returns `(labels, outlier_scores)` where labels use `NOISE` for unassigned
+/// points and outlier_scores are in [0, 1] (GLOSH; noise = 1.0).
+fn extract_clusters(
+    mst: &[(usize, usize, f32)],
+    n: usize,
+    min_cluster_size: usize,
+) -> (Vec<usize>, Vec<f32>) {
     if n == 1 {
-        return vec![NOISE];
+        return (vec![NOISE], vec![1.0]);
     }
 
     // Cluster ids start at n (point ids are 0..n-1).
@@ -497,7 +446,7 @@ fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usi
 
     let num_clusters = next_cluster_id - n;
     if num_clusters == 0 {
-        return vec![NOISE; n];
+        return (vec![NOISE; n], vec![1.0; n]);
     }
 
     // Compute lambda_birth for each cluster.
@@ -597,9 +546,6 @@ fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usi
     }
 
     // Enforce min_cluster_size: relabel undersized clusters as NOISE.
-    // This can happen when stability selection picks a cluster whose point
-    // count in the final labeling is smaller than min_cluster_size due to
-    // points being claimed by overlapping descendant selections.
     if min_cluster_size > 1 {
         let mut counts = vec![0usize; next_label];
         for &l in &labels {
@@ -612,7 +558,6 @@ fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usi
                 *l = NOISE;
             }
         }
-        // Relabel to remove gaps from removed clusters.
         let mut remap = vec![NOISE; next_label];
         let mut new_id = 0;
         for (old, &count) in counts.iter().enumerate() {
@@ -628,7 +573,112 @@ fn extract_clusters(mst: &[(usize, usize, f32)], n: usize, min_cluster_size: usi
         }
     }
 
-    labels
+    // -------------------------------------------------------------------
+    // GLOSH: Global-Local Outlier Score from Hierarchies (Campello et al. 2015)
+    //
+    // For each point p assigned to selected cluster c:
+    //   lambda_p      = lambda at which p fell out of the condensed tree
+    //   lambda_max(c) = max lambda of any point fallout belonging to c
+    //   GLOSH(p)      = 1 - lambda_p / lambda_max(c)
+    // Noise points get GLOSH = 1.0.
+    // -------------------------------------------------------------------
+
+    // Map each condensed-tree cluster index to its owning selected cluster.
+    let mut cluster_owner = vec![usize::MAX; num_clusters];
+    for i in 0..num_clusters {
+        if selected[i] {
+            assign_owner(&children, &selected, i, i, &mut cluster_owner);
+        }
+    }
+
+    // Build reverse map: final_label -> selected cluster index.
+    let final_label_count = labels
+        .iter()
+        .filter(|&&l| l != NOISE)
+        .copied()
+        .max()
+        .map_or(0, |m| m + 1);
+    let mut label_to_selected = vec![usize::MAX; final_label_count];
+    for (i, &lm) in label_map.iter().enumerate() {
+        if selected[i] && lm != usize::MAX && lm < final_label_count {
+            label_to_selected[lm] = i;
+        }
+    }
+
+    // For each point, find the maximum lambda from condensed tree edges
+    // whose parent cluster maps to the same selected cluster as the point's label.
+    let mut point_lambda = vec![0.0f64; n];
+    for edge in &condensed {
+        if edge.child_size != 1 || edge.child >= n {
+            continue;
+        }
+        let p = edge.child;
+        if labels[p] == NOISE {
+            continue;
+        }
+        let parent_idx = match edge.parent.checked_sub(n) {
+            Some(idx) if idx < num_clusters => idx,
+            _ => continue,
+        };
+        let owner = cluster_owner[parent_idx];
+        if owner >= num_clusters {
+            continue;
+        }
+        let owner_label = label_map[owner];
+        if owner_label == labels[p] && edge.lambda > point_lambda[p] {
+            point_lambda[p] = edge.lambda;
+        }
+    }
+
+    // Compute lambda_max per selected cluster.
+    let mut cluster_lambda_max = vec![0.0f64; num_clusters];
+    for (p, &l) in labels.iter().enumerate() {
+        if l == NOISE || l >= final_label_count {
+            continue;
+        }
+        let sel_idx = label_to_selected[l];
+        if sel_idx < num_clusters && point_lambda[p] > cluster_lambda_max[sel_idx] {
+            cluster_lambda_max[sel_idx] = point_lambda[p];
+        }
+    }
+
+    // Compute GLOSH scores.
+    let mut outlier_scores = vec![1.0f32; n];
+    for (p, &l) in labels.iter().enumerate() {
+        if l == NOISE || l >= final_label_count {
+            continue;
+        }
+        let sel_idx = label_to_selected[l];
+        if sel_idx >= num_clusters {
+            continue;
+        }
+        let lmax = cluster_lambda_max[sel_idx];
+        if lmax > 0.0 {
+            outlier_scores[p] = ((1.0 - point_lambda[p] / lmax) as f32).clamp(0.0, 1.0);
+        } else {
+            outlier_scores[p] = 0.0;
+        }
+    }
+
+    (labels, outlier_scores)
+}
+
+/// Recursively assign `owner` as the owning selected cluster for `node` and
+/// all non-selected descendants.
+fn assign_owner(
+    children: &[Vec<usize>],
+    selected: &[bool],
+    node: usize,
+    owner: usize,
+    cluster_owner: &mut [usize],
+) {
+    cluster_owner[node] = owner;
+    for &child in &children[node] {
+        if selected[child] {
+            continue;
+        }
+        assign_owner(children, selected, child, owner, cluster_owner);
+    }
 }
 
 /// Add individual point fallouts for all points in the component rooted at `comp_root`.
@@ -640,13 +690,7 @@ fn add_point_fallouts(
     lambda: f64,
     n: usize,
 ) {
-    // Find all points in this component.
-    // Since UnionFind doesn't track members, scan all points.
     for p in 0..n {
-        // We can't call find() because uf is not mutable, but we can check
-        // if a point's root matches comp_root by walking the parent chain.
-        // Actually, UnionFind::find needs &mut self due to path compression.
-        // Use the parent array directly for a non-mutating check.
         if find_root_readonly(&uf.parent, p) == comp_root {
             condensed.push(CondensedEdge {
                 parent: parent_cluster,
@@ -681,16 +725,12 @@ fn label_all_points(
             continue;
         }
         if edge.child_size == 1 && edge.child < n {
-            // Direct point fallout.
             labels[edge.child] = label;
         } else if edge.child_size > 1 && edge.child >= n {
-            // Child cluster.
             let child_idx = edge.child - n;
             if selected[child_idx] {
-                // Child is independently selected; don't override.
                 continue;
             }
-            // Recursively label all points in this non-selected child.
             label_all_points(condensed, selected, n, child_idx, label, labels);
         }
     }
@@ -731,21 +771,18 @@ mod tests {
 
         assert_eq!(labels.len(), 40);
 
-        // All points in the first spatial group should share one label.
         let l0 = labels[0];
         assert_ne!(l0, NOISE);
         for &l in &labels[1..20] {
             assert_eq!(l, l0);
         }
 
-        // All points in the second spatial group should share one label.
         let l20 = labels[20];
         assert_ne!(l20, NOISE);
         for &l in &labels[21..40] {
             assert_eq!(l, l20);
         }
 
-        // The two groups should have different labels.
         assert_ne!(l0, l20);
     }
 
@@ -781,10 +818,6 @@ mod tests {
         let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(5);
         let labels = hdbscan.fit_predict(&data).unwrap();
 
-        // In HDBSCAN, noise points that are absorbed into a cluster before the
-        // cross-cluster merge get labeled with that cluster. Points truly between
-        // clusters may or may not be noise depending on their mutual reachability
-        // distances. We check that at least 2 distinct clusters are found.
         let non_noise: std::collections::HashSet<usize> =
             labels.iter().copied().filter(|&l| l != NOISE).collect();
         assert!(non_noise.len() >= 2, "should find at least 2 clusters");
@@ -794,8 +827,6 @@ mod tests {
     fn single_cluster() {
         let data = make_cluster(&[0.0, 0.0], 20, 0.5);
 
-        // Use min_cluster_size > n/2 to prevent internal splits from creating
-        // two sub-clusters within the single spatial group.
         let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(15);
         let labels = hdbscan.fit_predict(&data).unwrap();
 
@@ -867,8 +898,6 @@ mod tests {
         let labels = hdbscan.fit_predict_with_noise(&data).unwrap();
 
         assert_eq!(labels.len(), 16);
-        // The distant outlier may or may not be noise depending on when it merges.
-        // But the cluster points should be labeled.
         let cluster_labels: Vec<_> = labels[..15].iter().filter_map(|l| *l).collect();
         assert!(
             !cluster_labels.is_empty(),
@@ -975,7 +1004,6 @@ mod tests {
             .with_min_samples(2)
             .fit_predict(&data)
             .unwrap();
-        // Duplicates must be in same cluster.
         assert_eq!(labels[0], labels[1]);
         assert_eq!(labels[0], labels[2]);
         assert_eq!(labels[3], labels[4]);

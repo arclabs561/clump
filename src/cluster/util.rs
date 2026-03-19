@@ -131,7 +131,7 @@ fn update_min_dists_for_centroid<D: DistanceMetric>(
 
 /// Initialize centroids using k-means++ (Arthur & Vassilvitskii, 2007).
 ///
-/// `data` is `&[Vec<f32>]`, `k` is the number of centroids to select.
+/// `k` is the number of centroids to select.
 /// `alpha` controls the distance weighting exponent: standard k-means++ uses 2.0
 /// (D^2 weighting). Negative distances are clamped to 0 to handle non-metric
 /// distances safely.

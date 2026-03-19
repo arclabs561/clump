@@ -9,6 +9,21 @@
 use super::distance::DistanceMetric;
 use super::flat::DataRef;
 
+/// Debug-mode finiteness check for metrics input.
+fn debug_validate_finite(data: &(impl DataRef + ?Sized)) {
+    if cfg!(debug_assertions) {
+        for i in 0..data.n() {
+            let row = data.row(i);
+            for (j, &val) in row.iter().enumerate() {
+                assert!(
+                    val.is_finite(),
+                    "data[{i}][{j}] is not finite (NaN or infinity)"
+                );
+            }
+        }
+    }
+}
+
 /// Silhouette score: mean silhouette coefficient across all points.
 ///
 /// For each point i:
@@ -26,6 +41,7 @@ pub fn silhouette_score<D: DistanceMetric>(
     labels: &[usize],
     metric: &D,
 ) -> f32 {
+    debug_validate_finite(data);
     let n = data.n();
     if n <= 1 {
         return 0.0;
@@ -118,6 +134,7 @@ pub fn calinski_harabasz(
     labels: &[usize],
     centroids: &[Vec<f32>],
 ) -> f32 {
+    debug_validate_finite(data);
     let n = data.n();
     let k = centroids.len();
     if k <= 1 || n <= k {
@@ -202,6 +219,7 @@ pub fn davies_bouldin<D: DistanceMetric>(
     centroids: &[Vec<f32>],
     metric: &D,
 ) -> f32 {
+    debug_validate_finite(data);
     let k = centroids.len();
     if k <= 1 {
         return 0.0;
@@ -265,6 +283,7 @@ pub fn silhouette_score_sampled<D: DistanceMetric>(
     sample_size: usize,
     seed: u64,
 ) -> f32 {
+    debug_validate_finite(data);
     let n = data.n();
     if n <= sample_size {
         return silhouette_score(data, labels, metric);
@@ -295,6 +314,7 @@ pub fn silhouette_score_noise_aware<D: DistanceMetric>(
     labels: &[usize],
     metric: &D,
 ) -> f32 {
+    debug_validate_finite(data);
     let noise = super::dbscan::NOISE;
     let n = data.n();
 
@@ -425,6 +445,7 @@ pub fn k_distance<D: DistanceMetric>(
     k: usize,
     metric: &D,
 ) -> Vec<f32> {
+    debug_validate_finite(data);
     let n = data.n();
     let k = k.min(n.saturating_sub(1)).max(1);
     let mut k_dists = Vec::with_capacity(n);

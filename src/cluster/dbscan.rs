@@ -144,13 +144,23 @@ impl<D: DistanceMetric> Dbscan<D> {
     }
 
     /// Set epsilon (neighborhood radius).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `epsilon <= 0.0`.
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
+        assert!(epsilon > 0.0, "epsilon must be positive");
         self.epsilon = epsilon;
         self
     }
 
     /// Set minimum points for core classification.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `min_pts == 0`.
     pub fn with_min_pts(mut self, min_pts: usize) -> Self {
+        assert!(min_pts > 0, "min_pts must be at least 1");
         self.min_pts = min_pts;
         self
     }

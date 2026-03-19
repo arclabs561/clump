@@ -147,10 +147,13 @@ impl CorrelationClustering {
     /// - `n_items`: total number of items. Items with no edges become singletons.
     /// - `edges`: signed pairwise relationships.
     ///
-    /// Uses PIVOT + local search, then an iterated-flip refinement step
-    /// (Cohen-Addad et al., STOC 2024): reweight inter-cluster edges by
-    /// doubling them and re-run, keeping the better solution. This improves
-    /// the worst-case approximation ratio from 3 to 1.875.
+    /// Uses PIVOT (3-approx) + merge pass + delta-cached local search,
+    /// then a reweighting heuristic inspired by Cohen-Addad et al. (STOC
+    /// 2024): double inter-cluster edge weights and re-run, keeping the
+    /// better solution. The worst-case guarantee remains 3-approx (PIVOT);
+    /// the reweighting improves results empirically but does not carry the
+    /// paper's ~1.85-approx bound (which requires preclustering + structured
+    /// rounding, not implemented here).
     ///
     /// Returns [`Error::InvalidParameter`] if any edge references an item index
     /// `>= n_items`.
