@@ -128,10 +128,13 @@ pub fn calinski_harabasz(data: &[Vec<f32>], labels: &[usize], centroids: &[Vec<f
         *x /= n as f64;
     }
 
-    // Cluster sizes.
+    // Cluster sizes (skip noise points).
+    let noise = super::dbscan::NOISE;
     let mut sizes = vec![0usize; k];
     for &l in labels {
-        sizes[l] += 1;
+        if l != noise && l < k {
+            sizes[l] += 1;
+        }
     }
 
     // Between-cluster dispersion: sum of n_k * ||c_k - c_global||^2.
@@ -149,9 +152,14 @@ pub fn calinski_harabasz(data: &[Vec<f32>], labels: &[usize], centroids: &[Vec<f
     }
 
     // Within-cluster dispersion: sum of ||x_i - c_{label(i)}||^2.
+    // Skip noise points to avoid index-out-of-bounds.
     let mut within = 0.0f64;
     for (i, point) in data.iter().enumerate() {
-        let centroid = &centroids[labels[i]];
+        let l = labels[i];
+        if l == noise || l >= k {
+            continue;
+        }
+        let centroid = &centroids[l];
         let sq_dist: f64 = point
             .iter()
             .zip(centroid.iter())
@@ -189,11 +197,15 @@ pub fn davies_bouldin<D: DistanceMetric>(
         return 0.0;
     }
 
-    // Mean intra-cluster distance per cluster.
+    // Mean intra-cluster distance per cluster (skip noise points).
+    let noise = super::dbscan::NOISE;
     let mut intra_sum = vec![0.0f64; k];
     let mut sizes = vec![0usize; k];
     for (i, point) in data.iter().enumerate() {
         let ci = labels[i];
+        if ci == noise || ci >= k {
+            continue;
+        }
         let d = metric.distance(point, &centroids[ci]) as f64;
         intra_sum[ci] += d;
         sizes[ci] += 1;
@@ -493,6 +505,40 @@ mod tests {
             db < 0.1,
             "well-separated clusters should have low DB, got {db}"
         );
+    }
+
+    #[test]
+    fn calinski_harabasz_with_noise_labels() {
+        let noise = crate::NOISE;
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+            vec![50.0, 50.0], // noise point
+        ];
+        let labels = vec![0, 0, 1, 1, noise];
+        let centroids = vec![vec![0.05, 0.05], vec![10.05, 10.05]];
+        // Must not panic on NOISE labels.
+        let ch = calinski_harabasz(&data, &labels, &centroids);
+        assert!(ch > 0.0, "CH should be positive, got {ch}");
+    }
+
+    #[test]
+    fn davies_bouldin_with_noise_labels() {
+        let noise = crate::NOISE;
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+            vec![50.0, 50.0], // noise point
+        ];
+        let labels = vec![0, 0, 1, 1, noise];
+        let centroids = vec![vec![0.05, 0.05], vec![10.05, 10.05]];
+        // Must not panic on NOISE labels.
+        let db = davies_bouldin(&data, &labels, &centroids, &Euclidean);
+        assert!(db < 1.0, "DB should be low for well-separated, got {db}");
     }
 
     #[test]
