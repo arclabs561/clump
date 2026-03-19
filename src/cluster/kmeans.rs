@@ -446,21 +446,23 @@ impl<D: DistanceMetric> Kmeans<D> {
                 }
             }
 
-            // Update step: O(n*d) additions -- sequential scan is faster than
-            // parallel for typical sizes since the work per point is tiny.
+            // Update step: accumulate in f64 to avoid precision loss at
+            // large n (sklearn pattern). f32 accumulation loses ~2.5 digits
+            // at n=100k, causing convergence issues.
+            let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
             for i in 0..n {
                 let k = labels[i];
                 for j in 0..d {
-                    new_centroids[k][j] += data[i][j];
+                    sums_f64[k][j] += data[i][j] as f64;
                 }
                 counts[k] += 1;
             }
 
             for k in 0..self.k {
                 if counts[k] > 0 {
-                    let divisor = counts[k] as f32;
-                    for val in &mut new_centroids[k] {
-                        *val /= divisor;
+                    let divisor = counts[k] as f64;
+                    for j in 0..d {
+                        new_centroids[k][j] = (sums_f64[k][j] / divisor) as f32;
                     }
                 } else {
                     // Empty cluster: split the largest cluster by moving the
@@ -1033,6 +1035,37 @@ mod tests {
         assert_eq!(labels1[2] == labels1[3], labels2[2] == labels2[3]);
         assert_ne!(labels1[0], labels1[2]);
         assert_ne!(labels2[0], labels2[2]);
+    }
+
+    /// Centroids should be accurate to ~1e-4 even at n=10000
+    /// (f64 accumulation prevents precision loss).
+    #[test]
+    fn precision_at_scale() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(42);
+        let n = 10000;
+        let data: Vec<Vec<f32>> = (0..n)
+            .map(|i| {
+                let center = if i < n / 2 { 0.0 } else { 10.0 };
+                vec![
+                    center + rng.random::<f32>() * 0.1,
+                    center + rng.random::<f32>() * 0.1,
+                ]
+            })
+            .collect();
+
+        let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
+
+        // Verify centroids are close to the true means (0.05, 0.05) and (10.05, 10.05).
+        for c in &fit.centroids {
+            let near_zero = (c[0] - 0.05).abs() < 0.1 && (c[1] - 0.05).abs() < 0.1;
+            let near_ten = (c[0] - 10.05).abs() < 0.1 && (c[1] - 10.05).abs() < 0.1;
+            assert!(
+                near_zero || near_ten,
+                "centroid {:?} should be near (0.05, 0.05) or (10.05, 10.05)",
+                c
+            );
+        }
     }
 }
 
