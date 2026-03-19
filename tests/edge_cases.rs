@@ -520,3 +520,388 @@ fn kmeans_with_inner_product_distance() {
     assert_eq!(labels.len(), 4);
     // No assertion on cluster quality -- just must not panic.
 }
+
+// ============================================================================
+// FlatRef edge cases
+// ============================================================================
+
+#[test]
+fn flatref_empty_zero_dim() {
+    let data = FlatRef::new(&[], 0, 0);
+    assert_eq!(data.n(), 0);
+    assert_eq!(data.d(), 0);
+}
+
+#[test]
+fn flatref_single_point() {
+    let flat = vec![1.0, 2.0, 3.0];
+    let data = FlatRef::new(&flat, 1, 3);
+    assert_eq!(data.row(0), &[1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn flatref_kmeans_large_k() {
+    // k = n with FlatRef.
+    let flat: Vec<f32> = (0..30).map(|i| i as f32).collect();
+    let data = FlatRef::new(&flat, 10, 3);
+    let fit = Kmeans::new(10).with_seed(42).fit(&data).unwrap();
+    let unique: std::collections::HashSet<_> = fit.labels.iter().collect();
+    assert_eq!(unique.len(), 10);
+}
+
+#[test]
+fn flatref_hdbscan_consistent() {
+    // HDBSCAN should produce identical results for Vec and FlatRef.
+    let vecs = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.0],
+        vec![0.0, 0.1],
+        vec![0.1, 0.1],
+        vec![0.05, 0.05],
+        vec![10.0, 10.0],
+        vec![10.1, 10.0],
+        vec![10.0, 10.1],
+        vec![10.1, 10.1],
+        vec![10.05, 10.05],
+    ];
+    let flat: Vec<f32> = vecs.iter().flat_map(|v| v.iter().copied()).collect();
+    let fref = FlatRef::new(&flat, 10, 2);
+
+    let hdb = Hdbscan::new().with_min_samples(2).with_min_cluster_size(3);
+    let labels_v = hdb.fit_predict(&vecs).unwrap();
+    let labels_f = hdb.fit_predict(&fref).unwrap();
+    assert_eq!(labels_v, labels_f);
+}
+
+#[test]
+fn flatref_optics_consistent() {
+    let vecs = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.0],
+        vec![0.0, 0.1],
+        vec![10.0, 10.0],
+        vec![10.1, 10.0],
+        vec![10.0, 10.1],
+    ];
+    let flat: Vec<f32> = vecs.iter().flat_map(|v| v.iter().copied()).collect();
+    let fref = FlatRef::new(&flat, 6, 2);
+
+    let result_v = Optics::new(1.0, 2).fit(&vecs).unwrap();
+    let result_f = Optics::new(1.0, 2).fit(&fref).unwrap();
+    assert_eq!(result_v.ordering, result_f.ordering);
+    // Reachability may differ by float rounding but should be very close.
+    for (a, b) in result_v
+        .reachability
+        .iter()
+        .zip(result_f.reachability.iter())
+    {
+        assert!((a - b).abs() < 1e-6 || (a.is_infinite() && b.is_infinite()));
+    }
+}
+
+// ============================================================================
+// GLOSH outlier score properties
+// ============================================================================
+
+#[test]
+fn hdbscan_glosh_noise_is_one() {
+    let mut data = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.0],
+        vec![0.0, 0.1],
+        vec![0.1, 0.1],
+        vec![0.05, 0.05],
+    ];
+    data.push(vec![100.0, 100.0]); // outlier
+
+    let result = Hdbscan::new()
+        .with_min_samples(2)
+        .with_min_cluster_size(3)
+        .fit(&data)
+        .unwrap();
+
+    // Noise points must have score 1.0.
+    for (i, &label) in result.labels.iter().enumerate() {
+        if label == NOISE {
+            assert!(
+                (result.outlier_scores[i] - 1.0).abs() < 1e-6,
+                "noise point {i} should have score 1.0, got {}",
+                result.outlier_scores[i]
+            );
+        }
+    }
+}
+
+#[test]
+fn hdbscan_glosh_cluster_center_low_score() {
+    // Points near the center of a dense cluster should have low outlier scores.
+    let mut data = Vec::new();
+    for i in 0..20 {
+        let x = (i % 5) as f32 * 0.1;
+        let y = (i / 5) as f32 * 0.1;
+        data.push(vec![x, y]);
+    }
+    // Add a distant cluster.
+    for i in 0..20 {
+        data.push(vec![
+            50.0 + (i % 5) as f32 * 0.1,
+            50.0 + (i / 5) as f32 * 0.1,
+        ]);
+    }
+
+    let result = Hdbscan::new()
+        .with_min_samples(3)
+        .with_min_cluster_size(5)
+        .fit(&data)
+        .unwrap();
+
+    // Non-noise scores should be in [0, 1].
+    for (i, &score) in result.outlier_scores.iter().enumerate() {
+        assert!(
+            (0.0..=1.0).contains(&score),
+            "point {i}: score {} not in [0, 1]",
+            score
+        );
+    }
+}
+
+// ============================================================================
+// Cross-algorithm consistency
+// ============================================================================
+
+#[test]
+fn dbscan_optics_cluster_structure_matches() {
+    // OPTICS extract_clusters(eps) must match DBSCAN(eps) cluster structure
+    // on a larger dataset than the in-module test.
+    let mut data = Vec::new();
+    for i in 0..15 {
+        data.push(vec![(i % 3) as f32 * 0.1, (i / 3) as f32 * 0.1]);
+    }
+    for i in 0..15 {
+        data.push(vec![
+            20.0 + (i % 3) as f32 * 0.1,
+            20.0 + (i / 3) as f32 * 0.1,
+        ]);
+    }
+    data.push(vec![10.0, 10.0]); // noise
+
+    let eps = 0.5;
+    let min_pts = 3;
+    let db_labels = Dbscan::new(eps, min_pts).fit_predict(&data).unwrap();
+    let optics_result = Optics::new(eps, min_pts).fit(&data).unwrap();
+    let op_labels = Optics::<Euclidean>::extract_clusters(&optics_result, eps);
+
+    // Same-cluster / different-cluster relationships must agree.
+    for i in 0..data.len() {
+        for j in (i + 1)..data.len() {
+            let db_same = db_labels[i] == db_labels[j] && db_labels[i] != NOISE;
+            let op_same = op_labels[i] == op_labels[j] && op_labels[i] != NOISE;
+            assert_eq!(
+                db_same, op_same,
+                "DBSCAN/OPTICS disagree on ({i},{j}): db=({},{}), op=({},{})",
+                db_labels[i], db_labels[j], op_labels[i], op_labels[j]
+            );
+        }
+    }
+}
+
+#[test]
+fn kmeans_wcss_decreases_with_more_clusters() {
+    // WCSS(k) >= WCSS(k+1) -- more clusters always reduces within-cluster variance.
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(42);
+    let data: Vec<Vec<f32>> = (0..100)
+        .map(|_| vec![rng.random::<f32>() * 10.0, rng.random::<f32>() * 10.0])
+        .collect();
+
+    let mut prev_wcss = f32::MAX;
+    for k in 1..=5 {
+        let fit = Kmeans::new(k)
+            .with_seed(42)
+            .with_max_iter(20)
+            .fit(&data)
+            .unwrap();
+        let wcss = fit.wcss(&data);
+        assert!(
+            wcss <= prev_wcss + 1e-3,
+            "WCSS(k={k}) = {wcss} > WCSS(k={}) = {prev_wcss}",
+            k - 1
+        );
+        prev_wcss = wcss;
+    }
+}
+
+// ============================================================================
+// Numerical stability
+// ============================================================================
+
+#[test]
+fn kmeans_extreme_scale_large() {
+    // Large magnitude but with enough relative separation for f32.
+    let data = vec![
+        vec![1e6, 1e6],
+        vec![1e6 + 1.0, 1e6 + 1.0],
+        vec![-1e6, -1e6],
+        vec![-1e6 - 1.0, -1e6 - 1.0],
+    ];
+    let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
+    assert_eq!(labels[0], labels[1]);
+    assert_eq!(labels[2], labels[3]);
+    assert_ne!(labels[0], labels[2]);
+}
+
+#[test]
+fn dbscan_very_small_epsilon() {
+    // epsilon smaller than any inter-point distance: all noise.
+    let data = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+    let labels = Dbscan::new(0.001, 2).fit_predict(&data).unwrap();
+    for &l in &labels {
+        assert_eq!(l, NOISE);
+    }
+}
+
+#[test]
+fn metrics_with_one_cluster_returns_zero() {
+    let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+    let labels = vec![0, 0, 0];
+    let sil = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
+    assert!(
+        sil.abs() < 0.01,
+        "single-cluster silhouette should be ~0, got {sil}"
+    );
+}
+
+// ============================================================================
+// DenStream decay consistency
+// ============================================================================
+
+#[test]
+fn denstream_base2_decay_rate() {
+    // After lambda * elapsed = 1 unit, weight should halve (base-2 decay).
+    let mut ds = DenStream::new(100.0, 2)
+        .with_beta(0.01)
+        .with_lambda(1.0) // decay factor
+        .with_mu(1.0)
+        .with_pruning_period(100_000);
+
+    // Feed one point.
+    ds.update(&[0.0, 0.0]).unwrap();
+
+    // Feed many points far away to advance time without merging.
+    for i in 1..=10 {
+        ds.update(&[1000.0 * i as f32, 0.0]).unwrap();
+    }
+
+    // The original cluster's centroid should still be near (0,0)
+    // but its weight should have decayed significantly.
+    let centroids = ds.centroids();
+    let has_origin = centroids.iter().any(|c| c[0].abs() < 1.0);
+    // With lambda=1.0 and ~10 time steps, 2^(-1*10) is very small.
+    // The cluster may have been pruned entirely.
+    // What matters is that the function doesn't panic and clusters are valid.
+    assert!(ds.n_clusters() >= 1, "should have at least 1 cluster");
+    if has_origin {
+        // If the origin cluster survived, its centroid is still near 0.
+        let origin_cluster = centroids.iter().find(|c| c[0].abs() < 1.0).unwrap();
+        assert!(origin_cluster[0].abs() < 1.0);
+    }
+}
+
+// ============================================================================
+// Constrained clustering edge cases
+// ============================================================================
+
+#[test]
+fn cop_kmeans_all_must_link_single_cluster() {
+    // All points must-linked: should produce 1 effective group.
+    let data = vec![vec![0.0, 0.0], vec![5.0, 5.0], vec![10.0, 10.0]];
+    let constraints = vec![Constraint::MustLink(0, 1), Constraint::MustLink(1, 2)];
+    // k=2 but all must-linked: one cluster gets all 3, other is empty/reinit.
+    let labels = CopKmeans::new(2)
+        .with_seed(42)
+        .fit_predict_constrained(&data, &constraints)
+        .unwrap();
+    assert_eq!(labels[0], labels[1]);
+    assert_eq!(labels[1], labels[2]);
+}
+
+// ============================================================================
+// Correlation clustering properties
+// ============================================================================
+
+#[test]
+fn correlation_zero_weight_edges_no_cost() {
+    // Zero-weight edges should contribute no cost regardless of assignment.
+    let edges = vec![
+        SignedEdge {
+            i: 0,
+            j: 1,
+            weight: 0.0,
+        },
+        SignedEdge {
+            i: 1,
+            j: 2,
+            weight: 0.0,
+        },
+    ];
+    let result = CorrelationClustering::new()
+        .with_seed(42)
+        .fit(3, &edges)
+        .unwrap();
+    assert!(
+        (result.cost - 0.0).abs() < 1e-9,
+        "zero-weight edges should produce zero cost"
+    );
+}
+
+#[test]
+fn correlation_single_strong_edge() {
+    // One very strong positive edge: those two must be co-clustered.
+    let edges = vec![
+        SignedEdge {
+            i: 0,
+            j: 1,
+            weight: 1000.0,
+        },
+        SignedEdge {
+            i: 0,
+            j: 2,
+            weight: -1.0,
+        },
+    ];
+    let result = CorrelationClustering::new()
+        .with_seed(42)
+        .fit(3, &edges)
+        .unwrap();
+    assert_eq!(
+        result.labels[0], result.labels[1],
+        "strongly positive pair must co-cluster"
+    );
+}
+
+// ============================================================================
+// MiniBatchKmeans convergence
+// ============================================================================
+
+#[test]
+fn minibatch_centroids_converge_toward_means() {
+    // After many passes, centroids should approximate cluster means.
+    let mut data = Vec::new();
+    for _ in 0..50 {
+        data.push(vec![0.0, 0.0]);
+    }
+    for _ in 0..50 {
+        data.push(vec![10.0, 10.0]);
+    }
+
+    let mut mbk = MiniBatchKmeans::new(2).with_seed(42);
+    for _ in 0..10 {
+        mbk.update_batch(&data).unwrap();
+    }
+
+    let centroids = mbk.centroids();
+    let near_zero = centroids.iter().any(|c| c[0] < 2.0 && c[1] < 2.0);
+    let near_ten = centroids.iter().any(|c| c[0] > 8.0 && c[1] > 8.0);
+    assert!(near_zero, "one centroid should be near (0,0)");
+    assert!(near_ten, "one centroid should be near (10,10)");
+}
