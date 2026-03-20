@@ -105,7 +105,8 @@ impl DistanceMetric for CosineDistance {
                 norm_b += y * y;
             }
             let denom = (norm_a * norm_b).sqrt();
-            if denom < f32::EPSILON {
+            // Use 1e-9 threshold to match innr SIMD path behavior.
+            if denom < 1e-9 {
                 return 0.0;
             }
             1.0 - (dot / denom)
