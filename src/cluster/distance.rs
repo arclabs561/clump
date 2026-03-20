@@ -122,9 +122,14 @@ impl DistanceMetric for CosineDistance {
 /// Hamerly bounds and k-means++ initialization clamp negative distances to 0,
 /// so k-means will work but may have reduced initialization quality. DBSCAN and
 /// HDBSCAN will treat all points as within epsilon of each other if epsilon > 0.
+#[deprecated(
+    since = "0.5.1",
+    note = "Violates DistanceMetric non-negativity contract. Will be removed in 0.6.0. Use CosineDistance instead."
+)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InnerProductDistance;
 
+#[allow(deprecated)]
 impl DistanceMetric for InnerProductDistance {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
@@ -147,6 +152,7 @@ impl DistanceMetric for InnerProductDistance {
 /// that plugs into any clustering algorithm.
 ///
 /// ```
+/// #![allow(deprecated)]
 /// use clump::cluster::distance::{CompositeDistance, SquaredEuclidean, Euclidean, DistanceMetric};
 ///
 /// let metric = CompositeDistance::new(SquaredEuclidean, Euclidean, 0.5, 0.5);
@@ -154,6 +160,10 @@ impl DistanceMetric for InnerProductDistance {
 /// // 0.5 * 25.0 + 0.5 * 5.0 = 15.0
 /// assert!((d - 15.0).abs() < 1e-6);
 /// ```
+#[deprecated(
+    since = "0.5.1",
+    note = "No algorithm tests exist for this type. Will be removed in 0.6.0. If you use it, please open an issue."
+)]
 #[derive(Clone, Debug)]
 pub struct CompositeDistance<A: DistanceMetric, B: DistanceMetric> {
     a: A,
@@ -162,6 +172,7 @@ pub struct CompositeDistance<A: DistanceMetric, B: DistanceMetric> {
     weight_b: f32,
 }
 
+#[allow(deprecated)]
 impl<A: DistanceMetric, B: DistanceMetric> CompositeDistance<A, B> {
     /// Create a new composite distance from two metrics and their weights.
     ///
@@ -176,6 +187,7 @@ impl<A: DistanceMetric, B: DistanceMetric> CompositeDistance<A, B> {
     }
 }
 
+#[allow(deprecated)]
 impl<A: DistanceMetric, B: DistanceMetric> DistanceMetric for CompositeDistance<A, B> {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
@@ -184,6 +196,7 @@ impl<A: DistanceMetric, B: DistanceMetric> DistanceMetric for CompositeDistance<
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

@@ -84,6 +84,7 @@ pub use constrained::{Constraint, CopKmeans};
 pub use correlation::{CorrelationClustering, CorrelationResult, SignedEdge};
 pub use dbscan::{Dbscan, NOISE};
 pub use denstream::DenStream;
+#[allow(deprecated)]
 pub use distance::{
     CompositeDistance, CosineDistance, DistanceMetric, Euclidean, InnerProductDistance,
     SquaredEuclidean,
