@@ -515,8 +515,8 @@ proptest! {
         }
     }
 
-    /// Both the geometric path (k<=20) and Hamerly path (k>20) must satisfy
-    /// the nearest-centroid invariant. Test k=5 (geometric) and k=25 (Hamerly).
+    // Both the geometric path (k<=20) and Hamerly path (k>20) must satisfy
+    // the nearest-centroid invariant. Test k=5 (geometric) and k=25 (Hamerly).
     #[test]
     fn kmeans_geometric_vs_hamerly_nearest(
         data in proptest::collection::vec(
@@ -623,8 +623,8 @@ proptest! {
         // and some actual distance, so it must be >= 0. (Already checked above.)
     }
 
-    /// OPTICS: reachability of a point must be >= the distance to at least one
-    /// earlier point in the ordering (since it was reached from some predecessor).
+    // OPTICS: for every point with finite reachability, some earlier point
+    // in the ordering must be within that reachability distance.
     #[test]
     fn optics_reachability_has_witness(
         data in proptest::collection::vec(
