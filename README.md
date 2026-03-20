@@ -24,7 +24,7 @@ Clustering algorithms for dense `f32` vectors in Rust. 9 algorithms, SIMD-accele
 
 ```toml
 [dependencies]
-clump = "0.5.1"
+clump = "0.5.2"
 ```
 
 ```rust
