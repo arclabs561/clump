@@ -23,6 +23,7 @@ pub mod cluster;
 /// Error types for clustering operations.
 pub mod error;
 
+#[allow(deprecated)]
 pub use cluster::{
     ClusterHierarchy, ClusterLayer, ClusterNode, CompositeDistance, Constraint, CopKmeans,
     CorrelationClustering, CorrelationResult, CosineDistance, DataRef, Dbscan, DenStream,

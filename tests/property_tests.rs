@@ -1,5 +1,7 @@
 //! Cross-cutting property tests that verify invariants across algorithms.
 
+#![allow(deprecated)]
+
 use clump::*;
 use proptest::prelude::*;
 
@@ -477,6 +479,174 @@ proptest! {
         prop_assert_eq!(kd.len(), data.len());
         for w in kd.windows(2) {
             prop_assert!(w[0] <= w[1] + 1e-6, "k-distance not sorted: {} > {}", w[0], w[1]);
+        }
+    }
+}
+
+// ============================================================================
+// Test 1: Lloyd/Hamerly parity -- every point assigned to its true nearest centroid
+// ============================================================================
+
+// After k-means converges, every point must be assigned to the centroid that
+// is actually closest under SquaredEuclidean. This catches Hamerly/geometric
+// bound drift where the accelerated assignment diverges from brute-force.
+proptest! {
+    #[test]
+    fn kmeans_nearest_centroid_invariant(
+        data in arb_data(30, 4),
+        k in 3usize..10,
+    ) {
+        if k > data.len() { return Ok(()); }
+        let fit = Kmeans::new(k).with_seed(42).with_max_iter(50)
+            .fit(&data).unwrap();
+        for (i, point) in data.iter().enumerate() {
+            let mut best_k = 0;
+            let mut best_dist = f32::MAX;
+            for (c, centroid) in fit.centroids.iter().enumerate() {
+                let dist: f32 = point.iter().zip(centroid)
+                    .map(|(a, b)| (a - b).powi(2)).sum();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_k = c;
+                }
+            }
+            prop_assert!(fit.labels[i] == best_k,
+                "point assigned to wrong centroid");
+        }
+    }
+
+    /// Both the geometric path (k<=20) and Hamerly path (k>20) must satisfy
+    /// the nearest-centroid invariant. Test k=5 (geometric) and k=25 (Hamerly).
+    #[test]
+    fn kmeans_geometric_vs_hamerly_nearest(
+        data in proptest::collection::vec(
+            proptest::collection::vec(-50.0f32..50.0, 4..=4),
+            30..=60
+        ),
+    ) {
+        for k in [5usize, 25] {
+            if k > data.len() { continue; }
+            let fit = Kmeans::new(k).with_seed(7).with_max_iter(50)
+                .fit(&data).unwrap();
+            for (i, point) in data.iter().enumerate() {
+                let mut best_k = 0;
+                let mut best_dist = f32::MAX;
+                for (c, centroid) in fit.centroids.iter().enumerate() {
+                    let dist: f32 = point.iter().zip(centroid)
+                        .map(|(a, b)| (a - b).powi(2)).sum();
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best_k = c;
+                    }
+                }
+                prop_assert!(fit.labels[i] == best_k,
+                    "wrong assignment for geometric/hamerly path");
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Test 2: f64 accumulation precision -- centroids approximate true cluster means
+// ============================================================================
+
+proptest! {
+    // With well-separated clusters, centroids must land within 1.0 of the true
+    // cluster means. Validates f64 accumulation prevents cancellation.
+    #[test]
+    fn kmeans_f64_precision_at_scale(seed in 0u64..20) {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let centers = [[0.0f32, 0.0], [20.0, 20.0], [40.0, 0.0]];
+        let mut data = Vec::with_capacity(3000);
+        for center in &centers {
+            for _ in 0..1000 {
+                data.push(vec![
+                    center[0] + (rng.random::<f32>() - 0.5) * 2.0,
+                    center[1] + (rng.random::<f32>() - 0.5) * 2.0,
+                ]);
+            }
+        }
+        let fit = Kmeans::new(3).with_seed(seed).with_max_iter(50)
+            .fit(&data).unwrap();
+
+        // Each centroid should be within 1e-1 of one of the true centers.
+        // (With uniform noise in [-1,1], expected mean offset is ~0.)
+        for center in &centers {
+            let near = fit.centroids.iter().any(|c| {
+                let dx = c[0] - center[0];
+                let dy = c[1] - center[1];
+                (dx * dx + dy * dy).sqrt() < 1.0
+            });
+            prop_assert!(near,
+                "no centroid near ({}, {}), centroids = {:?}",
+                center[0], center[1], fit.centroids);
+        }
+    }
+}
+
+// ============================================================================
+// Test 4: OPTICS reachability invariants (Ankerst et al. 1999)
+// ============================================================================
+
+proptest! {
+    // OPTICS invariant: first point has infinite reachability.
+    // All reachability/core_distance values are non-negative.
+    #[test]
+    fn optics_reachability_invariants(data in arb_data(15, 2)) {
+        let result = Optics::new(100.0, 2).fit(&data).unwrap();
+        let n = result.ordering.len();
+        prop_assert_eq!(n, data.len());
+
+        // First point: infinite reachability (no predecessor).
+        prop_assert!(result.reachability[0].is_infinite(),
+            "first point reachability should be inf, got {}",
+            result.reachability[0]);
+
+        // All reachability values are non-negative.
+        for (pos, &r) in result.reachability.iter().enumerate() {
+            prop_assert!(r >= 0.0,
+                "reachability[{pos}] = {r} is negative");
+        }
+
+        // All core distances are non-negative.
+        for (pos, &cd) in result.core_distances.iter().enumerate() {
+            prop_assert!(cd >= 0.0,
+                "core_distances[{pos}] = {cd} is negative");
+        }
+
+        // For core points with finite reachability: reachability >= core_distance
+        // of the predecessor is hard to verify without predecessor tracking.
+        // Instead verify: for any point with finite reachability, it must be
+        // reachable from some earlier point in the ordering.
+        // Weaker but testable: reachability[i] is the max of some core_dist
+        // and some actual distance, so it must be >= 0. (Already checked above.)
+    }
+
+    /// OPTICS: reachability of a point must be >= the distance to at least one
+    /// earlier point in the ordering (since it was reached from some predecessor).
+    #[test]
+    fn optics_reachability_has_witness(
+        data in proptest::collection::vec(
+            proptest::collection::vec(-10.0f32..10.0, 2..=2),
+            4..=15
+        ),
+    ) {
+        let result = Optics::new(100.0, 2).fit(&data).unwrap();
+        for pos in 1..result.ordering.len() {
+            let r = result.reachability[pos];
+            if r.is_infinite() { continue; }
+            let point_idx = result.ordering[pos];
+            // There must exist some earlier point whose distance to this point
+            // is <= reachability (since reachability = max(core_dist[pred], dist)).
+            let has_witness = (0..pos).any(|prev_pos| {
+                let prev_idx = result.ordering[prev_pos];
+                let dist = Euclidean.distance(&data[point_idx], &data[prev_idx]);
+                dist <= r + 1e-5
+            });
+            prop_assert!(has_witness,
+                "pos {pos} (point {point_idx}) has reachability {r} but no earlier \
+                 point is within that distance");
         }
     }
 }

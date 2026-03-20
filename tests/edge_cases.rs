@@ -350,6 +350,7 @@ fn squared_euclidean_overflow_check() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn inner_product_negative_distance() {
     // InnerProductDistance returns -dot, which is negative for aligned vectors.
     let a = vec![1.0, 1.0];
@@ -505,6 +506,7 @@ fn minibatch_predict_before_init() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn kmeans_with_inner_product_distance() {
     // InnerProductDistance returns negative values -- ensure no panic.
     let data = vec![
@@ -1203,4 +1205,236 @@ fn kmeans_very_small_tol_converges() {
         "very small tol should still converge, used {} iters",
         fit.iters
     );
+}
+
+// ============================================================================
+// Test 1: Lloyd/Hamerly parity -- nearest centroid invariant
+// ============================================================================
+
+/// k=5 exercises the geometric assign path (k<=20).
+#[test]
+fn kmeans_nearest_centroid_geometric_path() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(99);
+    let data: Vec<Vec<f32>> = (0..200)
+        .map(|_| vec![rng.random::<f32>() * 100.0, rng.random::<f32>() * 100.0])
+        .collect();
+    let fit = Kmeans::new(5)
+        .with_seed(99)
+        .with_max_iter(50)
+        .fit(&data)
+        .unwrap();
+    verify_nearest_assignment(&data, &fit.centroids, &fit.labels);
+}
+
+/// k=25 exercises the Hamerly bounds path (k>20).
+#[test]
+fn kmeans_nearest_centroid_hamerly_path() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(99);
+    let data: Vec<Vec<f32>> = (0..200)
+        .map(|_| vec![rng.random::<f32>() * 100.0, rng.random::<f32>() * 100.0])
+        .collect();
+    let fit = Kmeans::new(25)
+        .with_seed(99)
+        .with_max_iter(50)
+        .fit(&data)
+        .unwrap();
+    verify_nearest_assignment(&data, &fit.centroids, &fit.labels);
+}
+
+fn verify_nearest_assignment(data: &[Vec<f32>], centroids: &[Vec<f32>], labels: &[usize]) {
+    for (i, point) in data.iter().enumerate() {
+        let mut best_k = 0;
+        let mut best_dist = f32::MAX;
+        for (k, c) in centroids.iter().enumerate() {
+            let dist: f32 = point.iter().zip(c).map(|(a, b)| (a - b).powi(2)).sum();
+            if dist < best_dist {
+                best_dist = dist;
+                best_k = k;
+            }
+        }
+        assert_eq!(
+            labels[i], best_k,
+            "point {i} assigned to {} but nearest centroid is {} (dist {best_dist})",
+            labels[i], best_k
+        );
+    }
+}
+
+// ============================================================================
+// Test 2: f64 accumulation precision at scale
+// ============================================================================
+
+/// With 3000 points from 3 well-separated clusters, centroids must approximate
+/// the true means within 1.0 (validates f64 accumulation prevents drift).
+#[test]
+fn kmeans_f64_accumulation_precision() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(42);
+    let true_centers = [[0.0f32, 0.0], [30.0, 30.0], [60.0, 0.0]];
+    let mut data = Vec::with_capacity(3000);
+    for center in &true_centers {
+        for _ in 0..1000 {
+            data.push(vec![
+                center[0] + (rng.random::<f32>() - 0.5) * 2.0,
+                center[1] + (rng.random::<f32>() - 0.5) * 2.0,
+            ]);
+        }
+    }
+    let fit = Kmeans::new(3)
+        .with_seed(42)
+        .with_max_iter(100)
+        .fit(&data)
+        .unwrap();
+    for center in &true_centers {
+        let nearest_dist = fit
+            .centroids
+            .iter()
+            .map(|c| {
+                let dx = c[0] - center[0];
+                let dy = c[1] - center[1];
+                (dx * dx + dy * dy).sqrt()
+            })
+            .fold(f32::MAX, f32::min);
+        assert!(
+            nearest_dist < 1.0,
+            "no centroid within 1.0 of true center ({}, {}), nearest dist = {nearest_dist}",
+            center[0],
+            center[1]
+        );
+    }
+}
+
+// ============================================================================
+// Test 3: Silhouette -- Rousseeuw 1987 hand-computed values
+// ============================================================================
+
+/// Hand-computed silhouette for 6 points in 2 well-separated clusters
+/// using Euclidean distance.
+///
+/// Cluster 0: (0,0), (1,0), (0,1)
+/// Cluster 1: (10,0), (11,0), (10,1)
+///
+/// Individual silhouette values:
+///   s(0,0) = 0.90338, s(1,0) = 0.87100, s(0,1) = 0.88358
+///   s(10,0) = 0.89672, s(11,0) = 0.88703, s(10,1) = 0.87558
+/// Mean = 0.88622
+#[test]
+fn silhouette_rousseeuw_hand_computed() {
+    let data = vec![
+        vec![0.0f32, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![10.0, 0.0],
+        vec![11.0, 0.0],
+        vec![10.0, 1.0],
+    ];
+    let labels = vec![0, 0, 0, 1, 1, 1];
+    let score = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
+    let expected = 0.88622f32;
+    assert!(
+        (score - expected).abs() < 1e-3,
+        "silhouette score {score} differs from hand-computed {expected}"
+    );
+    assert!(
+        score > 0.8,
+        "well-separated clusters should give silhouette > 0.8, got {score}"
+    );
+}
+
+/// Two singleton clusters: silhouette = 0 (Rousseeuw convention).
+#[test]
+fn silhouette_two_singletons() {
+    let data = vec![vec![0.0f32, 0.0], vec![10.0, 0.0]];
+    let labels = vec![0, 1];
+    let score = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
+    assert!(
+        score.abs() < 1e-6,
+        "two singleton clusters should give silhouette 0, got {score}"
+    );
+}
+
+// ============================================================================
+// Test 4: OPTICS reachability invariants (Ankerst et al. 1999)
+// ============================================================================
+
+/// Two well-separated clusters: reachability plot should show a large jump.
+#[test]
+fn optics_reachability_valley_structure() {
+    let mut data = Vec::new();
+    for i in 0..10 {
+        data.push(vec![(i % 5) as f32 * 0.1, (i / 5) as f32 * 0.1]);
+    }
+    for i in 0..10 {
+        data.push(vec![
+            50.0 + (i % 5) as f32 * 0.1,
+            50.0 + (i / 5) as f32 * 0.1,
+        ]);
+    }
+    let result = Optics::new(200.0, 3).fit(&data).unwrap();
+    assert!(
+        result.reachability[0].is_infinite(),
+        "first point reachability should be inf, got {}",
+        result.reachability[0]
+    );
+    for (pos, &r) in result.reachability.iter().enumerate() {
+        assert!(r >= 0.0, "reachability[{pos}] = {r} should be non-negative");
+    }
+    for (pos, &cd) in result.core_distances.iter().enumerate() {
+        assert!(
+            cd >= 0.0,
+            "core_distances[{pos}] = {cd} should be non-negative"
+        );
+    }
+    let finite_reach: Vec<f32> = result
+        .reachability
+        .iter()
+        .copied()
+        .filter(|r| r.is_finite())
+        .collect();
+    if finite_reach.len() >= 2 {
+        let max_reach = finite_reach
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_reach = finite_reach.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(
+            max_reach > 10.0 * min_reach,
+            "reachability should show cluster separation: max={max_reach}, min={min_reach}"
+        );
+    }
+}
+
+/// OPTICS witness: for every point with finite reachability, some earlier
+/// point in the ordering must be within that reachability distance.
+#[test]
+fn optics_reachability_witness() {
+    let data = vec![
+        vec![0.0f32, 0.0],
+        vec![0.5, 0.0],
+        vec![1.0, 0.0],
+        vec![1.5, 0.0],
+        vec![10.0, 0.0],
+        vec![10.5, 0.0],
+        vec![11.0, 0.0],
+    ];
+    let result = Optics::new(100.0, 2).fit(&data).unwrap();
+    for pos in 1..result.ordering.len() {
+        let r = result.reachability[pos];
+        if r.is_infinite() {
+            continue;
+        }
+        let point_idx = result.ordering[pos];
+        let has_witness = (0..pos).any(|prev_pos| {
+            let prev_idx = result.ordering[prev_pos];
+            let dist = Euclidean.distance(&data[point_idx], &data[prev_idx]);
+            dist <= r + 1e-5
+        });
+        assert!(
+            has_witness,
+            "pos {pos} (point {point_idx}) has reachability {r} \
+             but no earlier point is within that distance"
+        );
+    }
 }
