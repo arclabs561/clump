@@ -76,7 +76,7 @@ src/cluster/
 
 ## Testing
 
-- 365 tests: unit, proptest, cross-algorithm consistency, DataRef equivalence, sklearn-inspired invariants
+- 373 tests: unit, proptest, cross-algorithm consistency, DataRef equivalence, sklearn-inspired invariants
 - Proptests on: k-means, DBSCAN, HDBSCAN, OPTICS, correlation, constrained, streaming, denstream
 - Cross-algorithm: OPTICS extract_clusters(eps) must match DBSCAN(eps) cluster structure
 - Key invariants tested: labels in range, predict consistency, WCSS non-negative, min_cluster_size enforced, ordering is permutation
