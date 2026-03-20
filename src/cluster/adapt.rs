@@ -50,6 +50,36 @@ pub fn flat_to_ref(flat: &[f32], n: usize, d: usize) -> super::flat::FlatRef<'_>
     super::flat::FlatRef::new(flat, n, d)
 }
 
+#[cfg(feature = "ndarray")]
+impl super::flat::DataRef for ndarray::ArrayView2<'_, f32> {
+    fn n(&self) -> usize {
+        self.nrows()
+    }
+    fn d(&self) -> usize {
+        self.ncols()
+    }
+    fn row(&self, i: usize) -> &[f32] {
+        let row = self.row(i);
+        row.to_slice()
+            .expect("ndarray DataRef requires standard (row-major) layout")
+    }
+}
+
+#[cfg(feature = "ndarray")]
+impl super::flat::DataRef for ndarray::Array2<f32> {
+    fn n(&self) -> usize {
+        self.nrows()
+    }
+    fn d(&self) -> usize {
+        self.ncols()
+    }
+    fn row(&self, i: usize) -> &[f32] {
+        let row = self.row(i);
+        row.to_slice()
+            .expect("ndarray DataRef requires standard (row-major) layout")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +95,27 @@ mod tests {
     #[should_panic(expected = "flat.len() must equal n * d")]
     fn flat_wrong_size() {
         flat_to_vecs(&[1.0, 2.0, 3.0], 2, 2);
+    }
+
+    #[cfg(feature = "ndarray")]
+    #[test]
+    fn ndarray_dataref_kmeans() {
+        use ndarray::Array2;
+        let arr = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 0.1, 0.1, 10.0, 10.0, 10.1, 10.1])
+            .unwrap();
+        let labels = crate::Kmeans::new(2)
+            .with_seed(42)
+            .fit_predict(&arr.view())
+            .unwrap();
+        assert_eq!(labels[0], labels[1]);
+        assert_ne!(labels[0], labels[2]);
+
+        // Also test owned Array2
+        let labels2 = crate::Kmeans::new(2)
+            .with_seed(42)
+            .fit_predict(&arr)
+            .unwrap();
+        assert_eq!(labels2[0], labels2[1]);
+        assert_ne!(labels2[0], labels2[2]);
     }
 }
