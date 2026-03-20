@@ -475,9 +475,9 @@ impl<D: DistanceMetric> Kmeans<D> {
                     }
 
                     #[cfg(not(feature = "parallel"))]
-                    if self.k <= 20 {
-                        // Geometric assign: bound-free, O(k^2) centroid-pair check.
-                        // Better than Hamerly for small k (no per-point bound overhead).
+                    if self.k <= 64 {
+                        // Gk-means three-stage filter (Sharma et al. 2025):
+                        // per-centroid pruning via inter-centroid + midplane tests.
                         util::geometric_assign(
                             data,
                             &centroids,

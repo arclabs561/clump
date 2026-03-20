@@ -219,11 +219,15 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
     best_cluster
 }
 
-/// Geometric k-means assignment (inspired by Sharma et al. 2025).
+/// Three-stage Gk-means assignment (Sharma et al. 2025).
 ///
-/// Bound-free: uses inter-centroid distances to skip points whose
-/// assignment provably cannot change. No per-point bound arrays.
-/// O(k^2) centroid-pair precomputation, O(n) scan with early skip.
+/// Stage 1 (LE): inter-centroid distance check skips points whose assignment
+/// provably cannot change. Stage 2 (LHE): identifies candidate centroids that
+/// could steal the point. Stage 3 (HE): scalar projection test prunes
+/// candidates without computing full distances (Euclidean-only; non-Euclidean
+/// metrics fall back to distance computation for Stage 2 candidates).
+///
+/// O(k^2) centroid-pair precomputation, O(n) scan with per-centroid pruning.
 pub(crate) fn geometric_assign<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
@@ -261,30 +265,78 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
         }
     }
 
-    // For each point: skip if inter-centroid gap exceeds displacement sum.
-    for i in 0..n {
-        let assigned = labels[i];
-        let my_shift = centroid_shifts[assigned];
+    // Precompute squared norms for scalar projection (HE stage).
+    // For the midplane test: dot(x - m, dir) = dot(x, c_j - c_a) - (||c_j||^2 - ||c_a||^2) / 2
+    // The last term depends only on centroid norms, precomputed here.
+    let use_projection = metric.supports_expanded_form();
+    let centroid_sq_norms: Vec<f32> = if use_projection {
+        centroids
+            .iter()
+            .map(|c| c.iter().map(|&v| v * v).sum())
+            .collect()
+    } else {
+        Vec::new()
+    };
 
+    for i in 0..n {
+        let a = labels[i];
+        let a_shift = centroid_shifts[a];
+
+        // Stage 1 (LE): if half_inter[a][j] > shift(a) + shift(j) for ALL j,
+        // no centroid can steal this point. Skip entirely.
         let mut can_skip = true;
         for j in 0..k {
-            if j == assigned {
+            if j == a {
                 continue;
             }
-            if half_inter[assigned][j] <= my_shift + centroid_shifts[j] {
+            if half_inter[a][j] <= a_shift + centroid_shifts[j] {
                 can_skip = false;
                 break;
             }
         }
-
         if can_skip {
             continue;
         }
 
-        let mut best = f32::MAX;
-        let mut best_k = assigned;
-        for (j, c) in centroids.iter().enumerate() {
-            let d = metric.distance(data.row(i), c);
+        // Stage 2 (LHE): identify candidate centroids that could steal the point.
+        // Only centroids where half_inter[a][j] <= shift(a) + shift(j) need checking.
+
+        // Compute distance to the assigned centroid (needed for comparison).
+        let point = data.row(i);
+        let dist_a = metric.distance(point, &centroids[a]);
+        let mut best = dist_a;
+        let mut best_k = a;
+
+        for j in 0..k {
+            if j == a {
+                continue;
+            }
+            // Stage 2 filter: skip centroids that can't possibly be closer.
+            if half_inter[a][j] > a_shift + centroid_shifts[j] {
+                continue;
+            }
+
+            // Stage 3 (HE): scalar projection test (Euclidean-only).
+            // The midplane between c_a and c_j divides space: points on c_j's
+            // side satisfy dot(x - m, c_j - c_a) > 0 where m = (c_a + c_j)/2.
+            // Expanding: dot(x, c_j - c_a) - (||c_j||^2 - ||c_a||^2) / 2 > 0
+            // If the point is on c_a's side, c_j cannot be closer.
+            if use_projection {
+                let ca = &centroids[a];
+                let cj = &centroids[j];
+                let mut dot_x_dir = 0.0f32;
+                for (idx, &xv) in point.iter().enumerate() {
+                    dot_x_dir += xv * (cj[idx] - ca[idx]);
+                }
+                let bias = (centroid_sq_norms[j] - centroid_sq_norms[a]) * 0.5;
+                if dot_x_dir <= bias {
+                    // Point is on c_a's side of the midplane; c_j cannot be closer.
+                    continue;
+                }
+            }
+
+            // Full distance computation for this candidate.
+            let d = metric.distance(point, &centroids[j]);
             if d < best {
                 best = d;
                 best_k = j;

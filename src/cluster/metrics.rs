@@ -5,6 +5,7 @@
 //! - [`silhouette_score`]: how well each point fits its cluster vs neighbors (-1 to 1)
 //! - [`calinski_harabasz`]: ratio of between-cluster to within-cluster variance (higher = better)
 //! - [`davies_bouldin`]: average worst-case cluster similarity (lower = better)
+//! - [`disco_score`]: density-connectivity silhouette with noise evaluation (Beer et al. 2025)
 
 use super::distance::DistanceMetric;
 use super::flat::DataRef;
@@ -466,6 +467,241 @@ pub fn k_distance<D: DistanceMetric>(
     k_dists
 }
 
+/// DISCO: density-connectivity-based cluster validation with noise evaluation.
+///
+/// Evaluates both cluster quality AND noise assignment quality, unlike standard
+/// silhouette which ignores noise. Uses mutual reachability distance as the
+/// density-connectivity measure (Beer et al. 2025, ICLR 2026).
+///
+/// For each clustered point, computes a silhouette-like score using mutual
+/// reachability distance (MRD) instead of raw distance. For each noise point,
+/// evaluates whether the noise label is justified: if the point's mean MRD to
+/// its nearest cluster exceeds that cluster's internal mean MRD, noise is
+/// correct (score +1); otherwise the point should have been clustered (score -1).
+///
+/// `min_pts` controls the density estimate (same parameter as DBSCAN/HDBSCAN).
+/// Range: \[-1, 1\]. Higher = better clustering with correct noise assignments.
+pub fn disco_score<D: DistanceMetric>(
+    data: &(impl DataRef + ?Sized),
+    labels: &[usize],
+    metric: &D,
+    min_pts: usize,
+) -> f32 {
+    debug_validate_finite(data);
+    let n = data.n();
+    let noise = super::dbscan::NOISE;
+
+    if n <= 1 {
+        return 0.0;
+    }
+
+    // All noise or single cluster -> 0.0.
+    let k = labels
+        .iter()
+        .copied()
+        .filter(|&l| l != noise)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+    if k == 0 {
+        return 0.0;
+    }
+    let has_multiple_clusters = k >= 2;
+
+    // Step 1: Compute pairwise raw distances.
+    let mut raw_dist = vec![0.0f32; n * n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = metric.distance(data.row(i), data.row(j));
+            raw_dist[i * n + j] = d;
+            raw_dist[j * n + i] = d;
+        }
+    }
+
+    // Step 2: Core distances (distance to min_pts-th nearest neighbor).
+    let k_nn = min_pts.min(n - 1).max(1);
+    let mut core_dist = vec![0.0f32; n];
+    let mut neighbor_dists = Vec::with_capacity(n);
+    for i in 0..n {
+        neighbor_dists.clear();
+        for j in 0..n {
+            if i != j {
+                neighbor_dists.push(raw_dist[i * n + j]);
+            }
+        }
+        neighbor_dists.select_nth_unstable_by(k_nn - 1, |a, b| a.total_cmp(b));
+        core_dist[i] = neighbor_dists[k_nn - 1];
+    }
+
+    // Step 3: Mutual reachability distance matrix.
+    // mrd(i,j) = max(core_dist[i], core_dist[j], raw_dist(i,j))
+    let mut mrd = vec![0.0f32; n * n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = raw_dist[i * n + j].max(core_dist[i]).max(core_dist[j]);
+            mrd[i * n + j] = d;
+            mrd[j * n + i] = d;
+        }
+    }
+
+    // Cluster sizes.
+    let mut cluster_sizes = vec![0usize; k];
+    for &l in labels {
+        if l < k {
+            cluster_sizes[l] += 1;
+        }
+    }
+
+    // Single cluster with no noise -> 0.0 (no inter-cluster comparison possible).
+    if !has_multiple_clusters {
+        // Check if there are noise points to score.
+        let has_noise = labels.iter().any(|&l| l == noise);
+        if !has_noise {
+            return 0.0;
+        }
+    }
+
+    // Precompute mean intra-cluster MRD for each cluster (used for noise evaluation).
+    let mut intra_mrd_sum = vec![0.0f64; k];
+    let mut intra_mrd_count = vec![0usize; k];
+    for i in 0..n {
+        let ci = labels[i];
+        if ci >= k {
+            continue;
+        }
+        for j in (i + 1)..n {
+            if labels[j] == ci {
+                let d = mrd[i * n + j] as f64;
+                intra_mrd_sum[ci] += d;
+                intra_mrd_count[ci] += 1;
+            }
+        }
+    }
+    let intra_mrd_mean: Vec<f64> = (0..k)
+        .map(|c| {
+            if intra_mrd_count[c] > 0 {
+                intra_mrd_sum[c] / intra_mrd_count[c] as f64
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    let mut total_score = 0.0f64;
+    let mut scored = 0usize;
+
+    // Step 4: Silhouette-like score for non-noise points.
+    if has_multiple_clusters {
+        for i in 0..n {
+            let ci = labels[i];
+            if ci == noise || ci >= k {
+                continue;
+            }
+            if cluster_sizes[ci] <= 1 {
+                // Singleton: score 0 (Rousseeuw convention).
+                scored += 1;
+                continue;
+            }
+
+            // a(i) = mean MRD to same-cluster points.
+            let mut a_sum = 0.0f64;
+            let mut a_count = 0usize;
+            let mut cluster_mrd_sum = vec![0.0f64; k];
+            let mut cluster_mrd_count = vec![0usize; k];
+
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                let lj = labels[j];
+                if lj == noise || lj >= k {
+                    continue;
+                }
+                let d = mrd[i * n + j] as f64;
+                cluster_mrd_sum[lj] += d;
+                cluster_mrd_count[lj] += 1;
+                if lj == ci {
+                    a_sum += d;
+                    a_count += 1;
+                }
+            }
+
+            let a = if a_count > 0 {
+                a_sum / a_count as f64
+            } else {
+                0.0
+            };
+
+            // b(i) = min mean MRD to another cluster.
+            let mut b = f64::MAX;
+            for c in 0..k {
+                if c == ci || cluster_mrd_count[c] == 0 {
+                    continue;
+                }
+                let mean_d = cluster_mrd_sum[c] / cluster_mrd_count[c] as f64;
+                if mean_d < b {
+                    b = mean_d;
+                }
+            }
+
+            let s = if b == f64::MAX {
+                0.0
+            } else if a.max(b) > 0.0 {
+                (b - a) / a.max(b)
+            } else {
+                0.0
+            };
+            total_score += s;
+            scored += 1;
+        }
+    }
+
+    // Step 5: Noise point evaluation.
+    for i in 0..n {
+        if labels[i] != noise {
+            continue;
+        }
+        // Find nearest cluster by mean MRD.
+        let mut best_cluster = 0usize;
+        let mut best_mean = f64::MAX;
+        for c in 0..k {
+            if cluster_sizes[c] == 0 {
+                continue;
+            }
+            let mut sum = 0.0f64;
+            let mut cnt = 0usize;
+            for j in 0..n {
+                if labels[j] == c {
+                    sum += mrd[i * n + j] as f64;
+                    cnt += 1;
+                }
+            }
+            if cnt > 0 {
+                let mean = sum / cnt as f64;
+                if mean < best_mean {
+                    best_mean = mean;
+                    best_cluster = c;
+                }
+            }
+        }
+
+        // If mean MRD to nearest cluster > cluster's internal mean MRD,
+        // the noise label is justified -> +1. Otherwise -> -1.
+        let s = if best_mean > intra_mrd_mean[best_cluster] {
+            1.0
+        } else {
+            -1.0
+        };
+        total_score += s;
+        scored += 1;
+    }
+
+    if scored == 0 {
+        return 0.0;
+    }
+    (total_score / scored as f64) as f32
+}
+
 /// Noise ratio: fraction of points labeled as noise.
 ///
 /// Useful as a companion metric for density-based clustering.
@@ -709,6 +945,93 @@ mod tests {
         assert!(
             (exact - sampled).abs() < 1e-6,
             "fallback should be exact: {sampled} vs {exact}"
+        );
+    }
+
+    #[test]
+    fn disco_perfect_clusters() {
+        // Two well-separated clusters, no noise -> high score.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.2, 0.0],
+            vec![10.0, 0.0],
+            vec![10.1, 0.0],
+            vec![10.2, 0.0],
+        ];
+        let labels = vec![0, 0, 0, 1, 1, 1];
+        let score = disco_score(&data, &labels, &Euclidean, 2);
+        assert!(
+            score > 0.8,
+            "perfect clusters should have DISCO > 0.8, got {score}"
+        );
+    }
+
+    #[test]
+    fn disco_with_correct_noise() {
+        // Two clusters + distant outlier labeled NOISE -> high score.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.2, 0.0],
+            vec![10.0, 0.0],
+            vec![10.1, 0.0],
+            vec![10.2, 0.0],
+            vec![50.0, 50.0], // distant outlier
+        ];
+        let noise = crate::NOISE;
+        let labels = vec![0, 0, 0, 1, 1, 1, noise];
+        let score = disco_score(&data, &labels, &Euclidean, 2);
+        assert!(
+            score > 0.5,
+            "correct noise should yield high DISCO, got {score}"
+        );
+    }
+
+    #[test]
+    fn disco_with_wrong_noise() {
+        // Two clusters, but a core cluster member is labeled NOISE -> lower score.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.2, 0.0],
+            vec![10.0, 0.0],
+            vec![10.1, 0.0],
+            vec![10.2, 0.0],
+        ];
+        let noise = crate::NOISE;
+        // Correct labels for reference.
+        let correct_labels = vec![0, 0, 0, 1, 1, 1];
+        let correct_score = disco_score(&data, &correct_labels, &Euclidean, 2);
+        // Mislabel a cluster member as noise.
+        let wrong_labels = vec![0, 0, noise, 1, 1, 1];
+        let wrong_score = disco_score(&data, &wrong_labels, &Euclidean, 2);
+        assert!(
+            wrong_score < correct_score,
+            "wrong noise ({wrong_score}) should score lower than correct ({correct_score})"
+        );
+    }
+
+    #[test]
+    fn disco_all_noise() {
+        let noise = crate::NOISE;
+        let data = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let labels = vec![noise, noise, noise];
+        let score = disco_score(&data, &labels, &Euclidean, 2);
+        assert!(
+            score.abs() < 0.01,
+            "all noise should give DISCO ~0, got {score}"
+        );
+    }
+
+    #[test]
+    fn disco_single_cluster() {
+        let data = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let labels = vec![0, 0, 0];
+        let score = disco_score(&data, &labels, &Euclidean, 2);
+        assert!(
+            score.abs() < 0.01,
+            "single cluster should give DISCO ~0, got {score}"
         );
     }
 }
