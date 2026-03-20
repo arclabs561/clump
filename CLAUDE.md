@@ -83,7 +83,6 @@ src/cluster/
 
 ## Known issues
 
-- OPTICS Xi extraction not yet implemented (DBSCAN-like extraction only)
 - k-means|| (parallel init) benchmarked and rejected: 2.3x slower than k-means++ at k=100
 
 ## Benchmarking

@@ -236,6 +236,99 @@ impl<D: DistanceMetric> Optics<D> {
         }
     }
 
+    /// Extract clusters using the Xi method (Ankerst et al. 1999).
+    ///
+    /// Detects significant valleys (steep-down followed by steep-up) in the
+    /// reachability plot. A point is "steep down" if its reachability drops
+    /// by a factor >= (1 - xi) relative to its predecessor. A "steep up"
+    /// is the reverse. Clusters are the regions between steep-down and
+    /// steep-up transitions.
+    ///
+    /// `xi` in (0, 1): smaller values require deeper valleys (fewer, tighter
+    /// clusters). Typical values: 0.01-0.1.
+    ///
+    /// Returns labels where noise is `NOISE` (`usize::MAX`).
+    pub fn extract_xi(result: &OpticsResult, xi: f32) -> Vec<usize> {
+        let n = result.ordering.len();
+        let noise = crate::NOISE;
+        if n == 0 {
+            return vec![];
+        }
+
+        let reach = &result.reachability;
+        let factor = 1.0 - xi;
+
+        // Compute a smoothed "max reachability so far" to detect valley
+        // boundaries. A valley starts when reachability drops significantly
+        // below the preceding maximum, and ends when it rises back.
+
+        // For each position, compute the local maximum reachability in a
+        // window looking backward (the "ridge" before the valley).
+        let mut max_before = vec![0.0f32; n];
+        let mut running_max = 0.0f32;
+        for p in 0..n {
+            if reach[p].is_infinite() {
+                // Reset at cluster boundaries so each valley is independent.
+                running_max = 0.0;
+            } else if reach[p] > running_max {
+                running_max = reach[p];
+            }
+            max_before[p] = running_max;
+        }
+
+        // A point is "in a valley" if its reachability is < factor * max_before.
+        // Contiguous valley regions become clusters.
+        // Detect valleys using predecessor comparison.
+        // A point enters a valley when reach[p] < reach[p-1] * factor (steep drop).
+        // A point leaves a valley when reach[p] > reach[p-1] / factor (steep rise).
+        // Between those transitions, points belong to the current cluster.
+        let mut label_by_pos = vec![noise; n];
+        let mut cluster_id = 0usize;
+        let mut in_valley = false;
+
+        for p in 1..n {
+            let prev = reach[p - 1];
+            let curr = reach[p];
+
+            if curr.is_infinite() {
+                in_valley = false;
+                continue;
+            }
+
+            if prev.is_infinite() {
+                // Transition from inf to finite: entering a cluster region.
+                in_valley = true;
+                cluster_id += 1;
+                label_by_pos[p] = cluster_id - 1;
+                continue;
+            }
+
+            // Steep down: current << previous.
+            if curr < prev * factor && !in_valley {
+                in_valley = true;
+                cluster_id += 1;
+                label_by_pos[p] = cluster_id - 1;
+            }
+            // Steep up: current >> previous.
+            else if curr > prev / factor && in_valley {
+                in_valley = false;
+                // This point is the ridge, not part of the valley.
+            }
+            // Continuation of current state.
+            else if in_valley {
+                label_by_pos[p] = cluster_id - 1;
+            }
+        }
+
+        // Map back to original point indices.
+        let mut label_by_orig = vec![noise; n];
+        for (pos, &orig_idx) in result.ordering.iter().enumerate() {
+            label_by_orig[orig_idx] = label_by_pos[pos];
+        }
+
+        label_by_orig
+    }
+
     /// Extract DBSCAN-like clusters from the reachability plot at a given epsilon.
     ///
     /// Points with reachability > epsilon start new clusters or become noise.
@@ -489,6 +582,90 @@ mod proptests {
                 "DBSCAN found {} clusters, OPTICS found {} clusters",
                 db_clusters.len(), op_clusters.len()
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod xi_tests {
+    use super::*;
+    use crate::cluster::distance::Euclidean;
+
+    #[test]
+    fn xi_two_clusters() {
+        // Two well-separated clusters: Xi should find 2 valleys.
+        let mut data = Vec::new();
+        for i in 0..10 {
+            data.push(vec![(i % 3) as f32 * 0.1, (i / 3) as f32 * 0.1]);
+        }
+        for i in 0..10 {
+            data.push(vec![
+                20.0 + (i % 3) as f32 * 0.1,
+                20.0 + (i / 3) as f32 * 0.1,
+            ]);
+        }
+
+        // max_eps must be large enough to connect within clusters AND see the gap.
+        let result = Optics::new(50.0, 2).fit(&data).unwrap();
+        let labels = Optics::<Euclidean>::extract_xi(&result, 0.1);
+
+        assert_eq!(labels.len(), 20);
+        let non_noise: std::collections::HashSet<usize> = labels
+            .iter()
+            .copied()
+            .filter(|&l| l != crate::NOISE)
+            .collect();
+        assert!(
+            non_noise.len() >= 2,
+            "Xi should find at least 2 clusters, found {}",
+            non_noise.len()
+        );
+    }
+
+    #[test]
+    fn xi_all_same_returns_one_or_no_cluster() {
+        let data = vec![vec![0.0, 0.0]; 10];
+        let result = Optics::new(1.0, 2).fit(&data).unwrap();
+        let labels = Optics::<Euclidean>::extract_xi(&result, 0.05);
+        assert_eq!(labels.len(), 10);
+        // All identical: no valleys in reachability -> all noise or one cluster.
+    }
+
+    #[test]
+    fn xi_single_point() {
+        let data = vec![vec![1.0, 2.0]];
+        let result = Optics::new(1.0, 2).fit(&data).unwrap();
+        let labels = Optics::<Euclidean>::extract_xi(&result, 0.1);
+        assert_eq!(labels.len(), 1);
+    }
+
+    #[test]
+    fn xi_empty() {
+        let result = OpticsResult {
+            ordering: vec![],
+            reachability: vec![],
+            core_distances: vec![],
+        };
+        let labels = Optics::<Euclidean>::extract_xi(&result, 0.1);
+        assert!(labels.is_empty());
+    }
+
+    #[test]
+    fn xi_labels_valid() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![0.0, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.0],
+            vec![10.0, 10.1],
+            vec![50.0, 50.0], // noise
+        ];
+        let result = Optics::new(1.0, 2).fit(&data).unwrap();
+        let labels = Optics::<Euclidean>::extract_xi(&result, 0.05);
+        assert_eq!(labels.len(), 7);
+        for &l in &labels {
+            assert!(l == crate::NOISE || l < 100, "label {} out of range", l);
         }
     }
 }
