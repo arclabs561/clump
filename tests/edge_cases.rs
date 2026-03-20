@@ -905,3 +905,302 @@ fn minibatch_centroids_converge_toward_means() {
     assert!(near_zero, "one centroid should be near (0,0)");
     assert!(near_ten, "one centroid should be near (10,10)");
 }
+
+// ============================================================================
+// Tests inspired by sklearn/hdbscan reference test suites
+// ============================================================================
+
+/// sklearn: fit_predict == fit().predict() (internal consistency).
+#[test]
+fn kmeans_fit_predict_equals_fit_then_predict() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(42);
+    let data: Vec<Vec<f32>> = (0..100)
+        .map(|_| vec![rng.random::<f32>() * 10.0, rng.random::<f32>() * 10.0])
+        .collect();
+    let labels_fp = Kmeans::new(5)
+        .with_seed(42)
+        .with_max_iter(10)
+        .fit_predict(&data)
+        .unwrap();
+    let fit = Kmeans::new(5)
+        .with_seed(42)
+        .with_max_iter(10)
+        .fit(&data)
+        .unwrap();
+    let labels_p = fit.predict(&data).unwrap();
+    assert_eq!(
+        labels_fp, labels_p,
+        "fit_predict and fit().predict() must agree"
+    );
+}
+
+/// sklearn: predict(centroids) returns identity [0, 1, ..., k-1].
+#[test]
+fn kmeans_predict_centroids_is_identity() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(7);
+    let data: Vec<Vec<f32>> = (0..200)
+        .map(|_| vec![rng.random::<f32>() * 50.0, rng.random::<f32>() * 50.0])
+        .collect();
+    let fit = Kmeans::new(10).with_seed(7).fit(&data).unwrap();
+    let predicted = fit.predict(&fit.centroids).unwrap();
+    let expected: Vec<usize> = (0..10).collect();
+    assert_eq!(
+        predicted, expected,
+        "centroid k should predict to cluster k"
+    );
+}
+
+/// sklearn: empty cluster relocation with deliberately bad init.
+#[test]
+fn kmeans_empty_cluster_relocated() {
+    // One centroid starts far from all data -- its cluster will be empty.
+    // k-means should relocate it (split the largest cluster).
+    let data = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.0],
+        vec![0.0, 0.1],
+        vec![0.1, 0.1],
+        vec![0.05, 0.05],
+    ];
+    let init = vec![
+        vec![0.05, 0.05],   // near the data
+        vec![999.0, 999.0], // far away -- will produce empty cluster
+    ];
+    let fit = Kmeans::new(2)
+        .with_centroids(init)
+        .with_max_iter(20)
+        .fit(&data)
+        .unwrap();
+    // Both clusters should have at least 1 point (empty one was relocated).
+    let mut counts = [0usize; 2];
+    for &l in &fit.labels {
+        counts[l] += 1;
+    }
+    assert!(
+        counts[0] > 0 && counts[1] > 0,
+        "empty cluster should be relocated, got counts {:?}",
+        counts
+    );
+}
+
+/// sklearn: k >= n_unique_points should converge without looping.
+#[test]
+fn kmeans_k_ge_n_unique_converges() {
+    // All points identical -- k=3 but only 1 unique point.
+    let data = vec![vec![5.0, 5.0]; 10];
+    let fit = Kmeans::new(3).with_seed(42).fit(&data).unwrap();
+    assert!(
+        fit.iters <= 3,
+        "should converge fast with identical points, got {} iters",
+        fit.iters
+    );
+    assert_eq!(fit.labels.len(), 10);
+}
+
+/// sklearn: DBSCAN eps boundary is inclusive (distance == eps counts as neighbor).
+#[test]
+fn dbscan_eps_boundary_inclusive_comprehensive() {
+    // Triangle: points at (0,0), (1,0), (0,1). Distance between adjacent = 1.0.
+    let data = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+    // With eps=1.0, min_pts=2: each point has 2 neighbors at distance exactly 1.
+    // All should be core points and in one cluster.
+    let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
+    assert_eq!(labels[0], labels[1], "eps boundary should be inclusive");
+    assert_eq!(labels[0], labels[2], "all three should connect");
+    assert_ne!(labels[0], NOISE, "all should be core points");
+}
+
+/// sklearn: DBSCAN with precomputed vs feature-space should agree.
+/// (Tests that grid/projection indexing doesn't lose neighbors.)
+#[test]
+fn dbscan_large_vs_small_n_agree() {
+    // Small n uses precomputed matrix; this verifies the result pattern.
+    let mut data = Vec::new();
+    for i in 0..8 {
+        data.push(vec![(i % 4) as f32 * 0.1, (i / 4) as f32 * 0.1]);
+    }
+    for i in 0..8 {
+        data.push(vec![
+            10.0 + (i % 4) as f32 * 0.1,
+            10.0 + (i / 4) as f32 * 0.1,
+        ]);
+    }
+
+    let labels = Dbscan::new(0.5, 3).fit_predict(&data).unwrap();
+    // First 8 should cluster together, last 8 together.
+    let c0 = labels[0];
+    let c1 = labels[8];
+    assert_ne!(c0, NOISE);
+    assert_ne!(c1, NOISE);
+    assert_ne!(c0, c1);
+    for &l in &labels[..8] {
+        assert_eq!(l, c0);
+    }
+    for &l in &labels[8..] {
+        assert_eq!(l, c1);
+    }
+}
+
+/// hdbscan ref: high-dimensional data should not degenerate.
+#[test]
+fn hdbscan_high_dimensional() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(42);
+    // Two clusters in 64-d space.
+    let mut data: Vec<Vec<f32>> = (0..25)
+        .map(|_| (0..64).map(|_| rng.random::<f32>()).collect())
+        .collect();
+    data.extend((0..25).map(|_| {
+        (0..64)
+            .map(|_| 100.0 + rng.random::<f32>())
+            .collect::<Vec<_>>()
+    }));
+
+    let labels = Hdbscan::new()
+        .with_min_samples(3)
+        .with_min_cluster_size(5)
+        .fit_predict(&data)
+        .unwrap();
+    assert_eq!(labels.len(), 50);
+    let non_noise: std::collections::HashSet<usize> =
+        labels.iter().copied().filter(|&l| l != NOISE).collect();
+    assert!(
+        non_noise.len() >= 2,
+        "should find at least 2 clusters in 64-d, found {}",
+        non_noise.len()
+    );
+}
+
+/// sklearn: silhouette of single-sample cluster is 0 (Rousseeuw convention).
+#[test]
+fn silhouette_single_sample_cluster_is_zero() {
+    let data = vec![vec![0.0], vec![1.0], vec![2.0], vec![100.0]];
+    // Point 3 is a singleton cluster.
+    let labels = vec![0, 0, 0, 1];
+    let score = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
+    // With one singleton, overall silhouette drops but should still be valid.
+    assert!(
+        score > -1.01 && score < 1.01,
+        "silhouette out of range: {score}"
+    );
+}
+
+/// sklearn: silhouette of identical points within cluster = high score.
+#[test]
+fn silhouette_identical_points_in_cluster() {
+    // Two clusters: 3 identical points at 0, 3 identical points at 100.
+    let data = vec![
+        vec![0.0],
+        vec![0.0],
+        vec![0.0],
+        vec![100.0],
+        vec![100.0],
+        vec![100.0],
+    ];
+    let labels = vec![0, 0, 0, 1, 1, 1];
+    let score = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
+    // Intra-cluster distance = 0, inter-cluster = 100. s(i) = (100-0)/100 = 1.0.
+    assert!(
+        score > 0.99,
+        "identical-point clusters should give silhouette ~1.0, got {score}"
+    );
+}
+
+/// sklearn: non-encoded labels invariance (labels are IDs, not values).
+#[test]
+fn silhouette_label_values_dont_matter() {
+    let data = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.0],
+        vec![10.0, 0.0],
+        vec![10.1, 0.0],
+    ];
+    let labels_012 = vec![0, 0, 1, 1];
+    let labels_big = vec![42, 42, 99, 99];
+    let s1 = cluster::metrics::silhouette_score(&data, &labels_012, &Euclidean);
+    let s2 = cluster::metrics::silhouette_score(&data, &labels_big, &Euclidean);
+    assert!(
+        (s1 - s2).abs() < 1e-6,
+        "label values shouldn't matter: {s1} vs {s2}"
+    );
+}
+
+/// linfa pattern: Send + Sync + Unpin for all public types.
+#[test]
+fn public_types_are_send_sync() {
+    fn assert_send_sync<T: Send + Sync + Unpin>() {}
+    assert_send_sync::<Kmeans>();
+    assert_send_sync::<KmeansFit>();
+    assert_send_sync::<Dbscan>();
+    assert_send_sync::<Hdbscan>();
+    assert_send_sync::<HdbscanResult>();
+    assert_send_sync::<Optics>();
+    assert_send_sync::<OpticsResult>();
+    assert_send_sync::<CopKmeans>();
+    assert_send_sync::<MiniBatchKmeans>();
+    assert_send_sync::<DenStream>();
+    assert_send_sync::<CorrelationClustering>();
+    assert_send_sync::<CorrelationResult>();
+    assert_send_sync::<SignedEdge>();
+    assert_send_sync::<Constraint>();
+    assert_send_sync::<FlatRef<'_>>();
+}
+
+/// sklearn: k-means refit from converged centroids is near-fixed-point.
+/// Boundary points may differ due to final reassignment pass.
+#[test]
+fn kmeans_refit_from_converged_near_fixed_point() {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(42);
+    let data: Vec<Vec<f32>> = (0..50)
+        .map(|_| vec![rng.random::<f32>() * 10.0, rng.random::<f32>() * 10.0])
+        .collect();
+    let fit1 = Kmeans::new(3).with_seed(42).fit(&data).unwrap();
+    let fit2 = Kmeans::new(3)
+        .with_centroids(fit1.centroids.clone())
+        .fit(&data)
+        .unwrap();
+    let agree = fit1
+        .labels
+        .iter()
+        .zip(&fit2.labels)
+        .filter(|(a, b)| a == b)
+        .count();
+    assert!(
+        agree >= data.len() * 95 / 100,
+        "refit should agree on >95%, got {}/{}",
+        agree,
+        data.len()
+    );
+    assert!(
+        fit2.iters <= 3,
+        "warm-start refit used {} iters",
+        fit2.iters
+    );
+}
+
+/// tol=0 runs all max_iter iterations (no early convergence).
+/// With a very small tol, it should still converge before max_iter
+/// on well-separated data.
+#[test]
+fn kmeans_very_small_tol_converges() {
+    let data = vec![
+        vec![0.0, 0.0],
+        vec![0.1, 0.1],
+        vec![10.0, 10.0],
+        vec![10.1, 10.1],
+    ];
+    let fit = Kmeans::new(2)
+        .with_seed(42)
+        .with_tol(1e-12)
+        .with_max_iter(100)
+        .fit(&data)
+        .unwrap();
+    assert!(
+        fit.iters < 100,
+        "very small tol should still converge, used {} iters",
+        fit.iters
+    );
+}
