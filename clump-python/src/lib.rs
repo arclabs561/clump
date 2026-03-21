@@ -2,33 +2,77 @@
 //!
 //! Exposes constrained clustering (COP-Kmeans), correlation clustering,
 //! k-means, DBSCAN, HDBSCAN, and evaluation metrics as a flat Python API.
+//! All point-data functions accept either a 2D numpy array or a list of lists.
+//! Clustering labels are returned as numpy int64 arrays (noise = -1).
 
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
-use clump::{
-    CorrelationClustering, CorrelationResult, CopKmeans, Constraint, SignedEdge,
-    Dbscan, Hdbscan, Kmeans, NOISE,
-};
 use clump::cluster::distance::Euclidean;
 use clump::cluster::metrics;
+use clump::{
+    Constraint, CopKmeans, CorrelationClustering, CorrelationResult, Dbscan, Hdbscan, Kmeans,
+    SignedEdge, NOISE,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert Python list[list[float]] -> Vec<Vec<f32>>.
-fn to_vecs(data: Vec<Vec<f64>>) -> Vec<Vec<f32>> {
-    data.into_iter()
+/// Accept either a 2D numpy array (f64 or f32) or list[list[float]].
+/// Returns Vec<Vec<f32>> for internal use.
+fn extract_data(data: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f32>>> {
+    // Try numpy f64 array first (most common from Python).
+    if let Ok(arr) = data.extract::<PyReadonlyArray2<f64>>() {
+        let view = arr.as_array();
+        return Ok(view
+            .rows()
+            .into_iter()
+            .map(|row| row.iter().map(|&v| v as f32).collect())
+            .collect());
+    }
+    // Try numpy f32 array (zero-copy friendly).
+    if let Ok(arr) = data.extract::<PyReadonlyArray2<f32>>() {
+        let view = arr.as_array();
+        return Ok(view
+            .rows()
+            .into_iter()
+            .map(|row| row.to_vec())
+            .collect());
+    }
+    // Fall back to list[list[float]].
+    let lists: Vec<Vec<f64>> = data.extract()?;
+    Ok(lists
+        .into_iter()
         .map(|row| row.into_iter().map(|v| v as f32).collect())
-        .collect()
+        .collect())
 }
 
-/// Map clump NOISE sentinel (usize::MAX) to -1 for Python convention.
-fn map_noise(labels: Vec<usize>) -> Vec<i64> {
-    labels
+/// Accept either a 1D numpy int64 array or list[int] for label input.
+/// Converts -1 back to NOISE sentinel.
+fn extract_labels(labels: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    if let Ok(arr) = labels.extract::<PyReadonlyArray1<i64>>() {
+        let view = arr.as_array();
+        return Ok(view
+            .iter()
+            .map(|&v| if v < 0 { NOISE } else { v as usize })
+            .collect());
+    }
+    // Fall back to list[int].
+    let list: Vec<i64> = labels.extract()?;
+    Ok(list
+        .into_iter()
+        .map(|v| if v < 0 { NOISE } else { v as usize })
+        .collect())
+}
+
+/// Convert label Vec<usize> to a numpy int64 array, mapping NOISE -> -1.
+fn labels_to_numpy<'py>(py: Python<'py>, labels: Vec<usize>) -> Bound<'py, PyArray1<i64>> {
+    let mapped: Vec<i64> = labels
         .into_iter()
         .map(|l| if l == NOISE { -1 } else { l as i64 })
-        .collect()
+        .collect();
+    mapped.into_pyarray(py)
 }
 
 // ---------------------------------------------------------------------------
@@ -46,13 +90,14 @@ fn map_noise(labels: Vec<usize>) -> Vec<i64> {
 ///     n_nodes: Total number of nodes.
 ///
 /// Returns:
-///     List of cluster labels (one per node).
+///     numpy.ndarray of cluster labels (int64, one per node).
 #[pyfunction]
 #[pyo3(signature = (edges, n_nodes))]
-fn correlation_clustering(
+fn correlation_clustering<'py>(
+    py: Python<'py>,
     edges: Vec<(usize, usize, f64)>,
     n_nodes: usize,
-) -> PyResult<Vec<usize>> {
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let signed_edges: Vec<SignedEdge> = edges
         .into_iter()
         .map(|(i, j, w)| SignedEdge {
@@ -67,7 +112,7 @@ fn correlation_clustering(
         .fit(n_nodes, &signed_edges)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    Ok(result.labels)
+    Ok(labels_to_numpy(py, result.labels))
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +124,7 @@ fn correlation_clustering(
 /// Standard k-means with must-link and cannot-link pairwise constraints.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
+///     data: Points as (n, d) numpy array or list of lists.
 ///     k: Number of clusters.
 ///     must_link: List of (i, j) pairs that must be in the same cluster.
 ///     cannot_link: List of (i, j) pairs that must be in different clusters.
@@ -87,20 +132,22 @@ fn correlation_clustering(
 ///     seed: Random seed for reproducibility (default None).
 ///
 /// Returns:
-///     List of cluster labels.
+///     numpy.ndarray of cluster labels (int64).
 #[pyfunction]
 #[pyo3(signature = (data, k, must_link, cannot_link, max_iter = 300, seed = None))]
-fn cop_kmeans(
-    data: Vec<Vec<f64>>,
+fn cop_kmeans<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
     k: usize,
     must_link: Vec<(usize, usize)>,
     cannot_link: Vec<(usize, usize)>,
     max_iter: usize,
     seed: Option<u64>,
-) -> PyResult<Vec<usize>> {
-    let vecs = to_vecs(data);
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let vecs = extract_data(data)?;
 
-    let mut constraints: Vec<Constraint> = Vec::with_capacity(must_link.len() + cannot_link.len());
+    let mut constraints: Vec<Constraint> =
+        Vec::with_capacity(must_link.len() + cannot_link.len());
     for (a, b) in must_link {
         constraints.push(Constraint::MustLink(a, b));
     }
@@ -117,7 +164,7 @@ fn cop_kmeans(
         .fit_predict_constrained(&vecs, &constraints)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    Ok(labels)
+    Ok(labels_to_numpy(py, labels))
 }
 
 // ---------------------------------------------------------------------------
@@ -127,22 +174,25 @@ fn cop_kmeans(
 /// K-means clustering.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
+///     data: Points as (n, d) numpy array or list of lists.
 ///     k: Number of clusters.
 ///     max_iter: Maximum iterations (default 300).
 ///     seed: Random seed for reproducibility (default None).
 ///
 /// Returns:
-///     Tuple of (labels, centroids).
+///     Tuple of (labels, centroids) as numpy arrays.
+///     labels: int64 array of shape (n,).
+///     centroids: float64 array of shape (k, d).
 #[pyfunction]
 #[pyo3(signature = (data, k, max_iter = 300, seed = None))]
-fn kmeans(
-    data: Vec<Vec<f64>>,
+fn kmeans<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
     k: usize,
     max_iter: usize,
     seed: Option<u64>,
-) -> PyResult<(Vec<usize>, Vec<Vec<f64>>)> {
-    let vecs = to_vecs(data);
+) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
+    let vecs = extract_data(data)?;
 
     let mut builder = Kmeans::new(k).with_max_iter(max_iter);
     if let Some(s) = seed {
@@ -153,13 +203,20 @@ fn kmeans(
         .fit(&vecs)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    let centroids: Vec<Vec<f64>> = fit
+    let n_centroids = fit.centroids.len();
+    let d = fit.centroids.first().map(|c| c.len()).unwrap_or(0);
+
+    // Flatten centroids into a contiguous f64 buffer, then reshape.
+    let flat: Vec<f64> = fit
         .centroids
         .iter()
-        .map(|c| c.iter().map(|&v| v as f64).collect())
+        .flat_map(|c| c.iter().map(|&v| v as f64))
         .collect();
 
-    Ok((fit.labels, centroids))
+    let centroids: Bound<'py, PyArray2<f64>> =
+        numpy::PyArray1::from_vec(py, flat).reshape([n_centroids, d])?;
+
+    Ok((labels_to_numpy(py, fit.labels), centroids))
 }
 
 // ---------------------------------------------------------------------------
@@ -169,22 +226,27 @@ fn kmeans(
 /// DBSCAN density-based clustering.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
+///     data: Points as (n, d) numpy array or list of lists.
 ///     eps: Maximum distance for neighborhood.
 ///     min_points: Minimum neighbors to form a core point.
 ///
 /// Returns:
-///     List of cluster labels. Noise points are labeled -1.
+///     numpy.ndarray of cluster labels (int64). Noise points are labeled -1.
 #[pyfunction]
 #[pyo3(signature = (data, eps, min_points))]
-fn dbscan(data: Vec<Vec<f64>>, eps: f64, min_points: usize) -> PyResult<Vec<i64>> {
-    let vecs = to_vecs(data);
+fn dbscan<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    eps: f64,
+    min_points: usize,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let vecs = extract_data(data)?;
 
     let labels = Dbscan::new(eps as f32, min_points)
         .fit_predict(&vecs)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    Ok(map_noise(labels))
+    Ok(labels_to_numpy(py, labels))
 }
 
 // ---------------------------------------------------------------------------
@@ -194,20 +256,21 @@ fn dbscan(data: Vec<Vec<f64>>, eps: f64, min_points: usize) -> PyResult<Vec<i64>
 /// HDBSCAN hierarchical density-based clustering.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
+///     data: Points as (n, d) numpy array or list of lists.
 ///     min_cluster_size: Minimum points for a cluster to persist.
 ///     min_points: k for core distance computation (default: min_cluster_size).
 ///
 /// Returns:
-///     List of cluster labels. Noise points are labeled -1.
+///     numpy.ndarray of cluster labels (int64). Noise points are labeled -1.
 #[pyfunction]
 #[pyo3(signature = (data, min_cluster_size, min_points = None))]
-fn hdbscan(
-    data: Vec<Vec<f64>>,
+fn hdbscan<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
     min_cluster_size: usize,
     min_points: Option<usize>,
-) -> PyResult<Vec<i64>> {
-    let vecs = to_vecs(data);
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let vecs = extract_data(data)?;
 
     let min_samples = min_points.unwrap_or(min_cluster_size);
 
@@ -217,7 +280,7 @@ fn hdbscan(
         .fit_predict(&vecs)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    Ok(map_noise(labels))
+    Ok(labels_to_numpy(py, labels))
 }
 
 // ---------------------------------------------------------------------------
@@ -229,38 +292,43 @@ fn hdbscan(
 /// Range: [-1, 1]. Higher is better.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
-///     labels: Cluster labels (non-negative integers).
+///     data: Points as (n, d) numpy array or list of lists.
+///     labels: Cluster labels as numpy int64 array or list of ints.
 ///
 /// Returns:
 ///     Mean silhouette score.
 #[pyfunction]
 #[pyo3(signature = (data, labels))]
-fn silhouette_score(data: Vec<Vec<f64>>, labels: Vec<usize>) -> PyResult<f64> {
-    let vecs = to_vecs(data);
-    let score = metrics::silhouette_score(&vecs, &labels, &Euclidean);
+fn silhouette_score(data: &Bound<'_, PyAny>, labels: &Bound<'_, PyAny>) -> PyResult<f64> {
+    let vecs = extract_data(data)?;
+    let labs = extract_labels(labels)?;
+    let score = metrics::silhouette_score(&vecs, &labs, &Euclidean);
     Ok(score as f64)
 }
 
 /// Calinski-Harabasz index (variance ratio criterion). Higher is better.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
-///     labels: Cluster labels (non-negative integers).
+///     data: Points as (n, d) numpy array or list of lists.
+///     labels: Cluster labels as numpy int64 array or list of ints.
 ///
 /// Returns:
 ///     Calinski-Harabasz score.
 #[pyfunction]
 #[pyo3(signature = (data, labels))]
-fn calinski_harabasz_score(data: Vec<Vec<f64>>, labels: Vec<usize>) -> PyResult<f64> {
-    let vecs = to_vecs(data);
+fn calinski_harabasz_score(
+    data: &Bound<'_, PyAny>,
+    labels: &Bound<'_, PyAny>,
+) -> PyResult<f64> {
+    let vecs = extract_data(data)?;
+    let labs = extract_labels(labels)?;
 
     // Compute centroids from labels.
-    let k = labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+    let k = labs.iter().copied().max().map(|m| m + 1).unwrap_or(0);
     let d = vecs.first().map(|r| r.len()).unwrap_or(0);
     let mut sums = vec![vec![0.0f64; d]; k];
     let mut counts = vec![0usize; k];
-    for (i, &l) in labels.iter().enumerate() {
+    for (i, &l) in labs.iter().enumerate() {
         if l < k {
             counts[l] += 1;
             for (j, &v) in vecs[i].iter().enumerate() {
@@ -280,29 +348,30 @@ fn calinski_harabasz_score(data: Vec<Vec<f64>>, labels: Vec<usize>) -> PyResult<
         })
         .collect();
 
-    let score = metrics::calinski_harabasz(&vecs, &labels, &centroids);
+    let score = metrics::calinski_harabasz(&vecs, &labs, &centroids);
     Ok(score as f64)
 }
 
 /// Davies-Bouldin index. Lower is better.
 ///
 /// Args:
-///     data: List of points, each a list of floats.
-///     labels: Cluster labels (non-negative integers).
+///     data: Points as (n, d) numpy array or list of lists.
+///     labels: Cluster labels as numpy int64 array or list of ints.
 ///
 /// Returns:
 ///     Davies-Bouldin score.
 #[pyfunction]
 #[pyo3(signature = (data, labels))]
-fn davies_bouldin_score(data: Vec<Vec<f64>>, labels: Vec<usize>) -> PyResult<f64> {
-    let vecs = to_vecs(data);
+fn davies_bouldin_score(data: &Bound<'_, PyAny>, labels: &Bound<'_, PyAny>) -> PyResult<f64> {
+    let vecs = extract_data(data)?;
+    let labs = extract_labels(labels)?;
 
     // Compute centroids from labels.
-    let k = labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+    let k = labs.iter().copied().max().map(|m| m + 1).unwrap_or(0);
     let d = vecs.first().map(|r| r.len()).unwrap_or(0);
     let mut sums = vec![vec![0.0f64; d]; k];
     let mut counts = vec![0usize; k];
-    for (i, &l) in labels.iter().enumerate() {
+    for (i, &l) in labs.iter().enumerate() {
         if l < k {
             counts[l] += 1;
             for (j, &v) in vecs[i].iter().enumerate() {
@@ -322,7 +391,7 @@ fn davies_bouldin_score(data: Vec<Vec<f64>>, labels: Vec<usize>) -> PyResult<f64
         })
         .collect();
 
-    let score = metrics::davies_bouldin(&vecs, &labels, &centroids, &Euclidean);
+    let score = metrics::davies_bouldin(&vecs, &labs, &centroids, &Euclidean);
     Ok(score as f64)
 }
 
