@@ -24,6 +24,9 @@ Homepage = "https://github.com/arclabs561/clump"
 Documentation = "https://docs.rs/clump"
 Repository = "https://github.com/arclabs561/clump"
 
+[project.optional-dependencies]
+numpy = ["numpy>=1.20"]
+
 [tool.maturin]
 module-name = "clumppy"
 

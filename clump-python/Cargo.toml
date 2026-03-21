@@ -17,6 +17,7 @@ doc = false
 
 [dependencies]
 clump = { path = "..", features = ["parallel", "simd"] }
+numpy = "0.28"
 pyo3 = "0.28"
 
 [workspace]
