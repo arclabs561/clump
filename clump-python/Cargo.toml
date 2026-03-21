@@ -1,0 +1,23 @@
+[package]
+name = "clump-python"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+authors = ["Arc <attobop@gmail.com>"]
+description = "Python bindings for clump (Rust)."
+repository = "https://github.com/arclabs561/clump"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "clumppy"
+crate-type = ["cdylib"]
+doc = false
+
+[dependencies]
+clump = { path = "..", features = ["parallel", "simd"] }
+pyo3 = "0.28"
+
+[workspace]
+resolver = "2"
