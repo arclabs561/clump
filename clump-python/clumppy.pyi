@@ -1,6 +1,9 @@
 """Type stubs for clumppy -- Python bindings to the clump Rust crate.
 
-Note: NaN values in numeric data inputs will raise a ValueError.
+Numeric data is processed in float32 internally. Float64 inputs are
+converted, which may affect precision beyond ~7 significant digits.
+
+NaN values in numeric data inputs will raise a ValueError.
 The Rust backend validates inputs and rejects NaN before processing.
 """
 
