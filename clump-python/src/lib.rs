@@ -92,11 +92,12 @@ fn labels_to_numpy<'py>(py: Python<'py>, labels: Vec<usize>) -> Bound<'py, PyArr
 /// Returns:
 ///     numpy.ndarray of cluster labels (int64, one per node).
 #[pyfunction]
-#[pyo3(signature = (edges, n_nodes))]
+#[pyo3(signature = (edges, n_nodes, seed=None))]
 fn correlation_clustering<'py>(
     py: Python<'py>,
     edges: Vec<(usize, usize, f64)>,
     n_nodes: usize,
+    seed: Option<u64>,
 ) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let signed_edges: Vec<SignedEdge> = edges
         .into_iter()
@@ -108,7 +109,7 @@ fn correlation_clustering<'py>(
         .collect();
 
     let result: CorrelationResult = CorrelationClustering::new()
-        .with_seed(42)
+        .with_seed(seed.unwrap_or(42))
         .fit(n_nodes, &signed_edges)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
@@ -401,6 +402,8 @@ fn davies_bouldin_score(data: &Bound<'_, PyAny>, labels: &Bound<'_, PyAny>) -> P
 
 #[pymodule]
 fn clumppy(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", "0.1.0")?;
+
     // Unique algorithms (the gaps)
     m.add_function(wrap_pyfunction!(correlation_clustering, m)?)?;
     m.add_function(wrap_pyfunction!(cop_kmeans, m)?)?;

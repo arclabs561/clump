@@ -5,9 +5,12 @@ from typing import Optional, Union
 import numpy as np
 from numpy.typing import NDArray
 
+__version__: str
+
 def correlation_clustering(
     edges: list[tuple[int, int, float]],
     n_nodes: int,
+    seed: Optional[int] = None,
 ) -> NDArray[np.int64]:
     """Cluster items from signed pairwise edges.
 
