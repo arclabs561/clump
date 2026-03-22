@@ -438,3 +438,25 @@ def test_optics_numpy():
     assert len(result.ordering) == 6
     labels = result.extract_clusters(epsilon=0.5)
     assert len(labels) == 6
+
+
+# ---------------------------------------------------------------------------
+# Bug-fix regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_clumppy_metrics_with_noise_labels():
+    """Metric functions must handle noise labels (-1) without overflow."""
+    data = _three_clusters()
+    # Labels where some points are noise (-1)
+    labels = np.array(
+        [0, 0, 0, 0, -1, 1, 1, 1, 1, -1, 2, 2, 2, 2, -1],
+        dtype=np.int64,
+    )
+    # These must not overflow or panic
+    ch = clumppy.calinski_harabasz_score(data, labels)
+    assert ch > 0
+    db = clumppy.davies_bouldin_score(data, labels)
+    assert db >= 0
+    sil = clumppy.silhouette_score(data, labels)
+    assert -1 <= sil <= 1
