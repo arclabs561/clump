@@ -248,3 +248,10 @@ def test_correlation_clustering_returns_numpy():
     labels = clumppy.correlation_clustering(edges, n_nodes=3)
     assert isinstance(labels, np.ndarray)
     assert labels.dtype == np.int64
+
+
+def test_correlation_clustering_seed():
+    edges = [(0, 1, 1.0), (0, 2, -1.0), (1, 2, -1.0)]
+    labels_a = clumppy.correlation_clustering(edges, n_nodes=3, seed=123)
+    labels_b = clumppy.correlation_clustering(edges, n_nodes=3, seed=123)
+    np.testing.assert_array_equal(labels_a, labels_b)
