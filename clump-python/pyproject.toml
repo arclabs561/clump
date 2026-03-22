@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "clumppy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Dense clustering: k-means, DBSCAN, HDBSCAN, COP-Kmeans (constrained), correlation clustering, and more."
 readme = "README.md"
 requires-python = ">=3.8"
