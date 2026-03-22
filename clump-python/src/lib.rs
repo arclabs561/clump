@@ -12,7 +12,7 @@ use clump::cluster::distance::Euclidean;
 use clump::cluster::metrics;
 use clump::{
     Constraint, CopKmeans, CorrelationClustering, CorrelationResult, Dbscan, Hdbscan, Kmeans,
-    SignedEdge, NOISE,
+    KmeansFit, MiniBatchKmeans, Optics, OpticsResult, SignedEdge, NOISE,
 };
 
 // ---------------------------------------------------------------------------
@@ -204,19 +204,7 @@ fn kmeans<'py>(
         .fit(&vecs)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    let n_centroids = fit.centroids.len();
-    let d = fit.centroids.first().map(|c| c.len()).unwrap_or(0);
-
-    // Flatten centroids into a contiguous f64 buffer, then reshape.
-    let flat: Vec<f64> = fit
-        .centroids
-        .iter()
-        .flat_map(|c| c.iter().map(|&v| v as f64))
-        .collect();
-
-    let centroids: Bound<'py, PyArray2<f64>> =
-        numpy::PyArray1::from_vec(py, flat).reshape([n_centroids, d])?;
-
+    let centroids = centroids_to_numpy(py, &fit.centroids)?;
     Ok((labels_to_numpy(py, fit.labels), centroids))
 }
 
@@ -397,6 +385,309 @@ fn davies_bouldin_score(data: &Bound<'_, PyAny>, labels: &Bound<'_, PyAny>) -> P
 }
 
 // ---------------------------------------------------------------------------
+// KmeansModel -- fitted k-means with predict
+// ---------------------------------------------------------------------------
+
+/// Fitted k-means model. Wraps the Rust KmeansFit struct and exposes
+/// labels, centroids, inertia, and prediction on new data.
+#[pyclass]
+struct KmeansModel {
+    fit: KmeansFit,
+    /// Original training data (needed for wcss computation).
+    training_data: Vec<Vec<f32>>,
+}
+
+#[pymethods]
+impl KmeansModel {
+    /// Cluster labels for the training data (int64 numpy array).
+    #[getter]
+    fn labels<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        labels_to_numpy(py, self.fit.labels.clone())
+    }
+
+    /// Learned centroids as (k, d) float64 numpy array.
+    #[getter]
+    fn centroids<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        centroids_to_numpy(py, &self.fit.centroids)
+    }
+
+    /// Final WCSS (within-cluster sum of squares / inertia).
+    #[getter]
+    fn inertia(&self) -> f64 {
+        self.fit
+            .inertia_trace
+            .last()
+            .copied()
+            .unwrap_or(self.fit.wcss(&self.training_data)) as f64
+    }
+
+    /// Number of Lloyd iterations executed.
+    #[getter]
+    fn n_iter(&self) -> usize {
+        self.fit.iters
+    }
+
+    /// Assign new points to the nearest learned centroid.
+    ///
+    /// Args:
+    ///     data: Points as (n, d) numpy array or list of lists.
+    ///
+    /// Returns:
+    ///     numpy.ndarray of cluster labels (int64).
+    fn predict<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray1<i64>>> {
+        let vecs = extract_data(data)?;
+        let labels = self
+            .fit
+            .predict(&vecs)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        Ok(labels_to_numpy(py, labels))
+    }
+}
+
+/// Fit k-means and return a model object with predict capability.
+///
+/// Args:
+///     data: Points as (n, d) numpy array or list of lists.
+///     k: Number of clusters.
+///     max_iter: Maximum iterations (default 300).
+///     seed: Random seed for reproducibility (default None).
+///
+/// Returns:
+///     KmeansModel with .labels, .centroids, .inertia, .predict(data).
+#[pyfunction]
+#[pyo3(signature = (data, k, max_iter = 300, seed = None))]
+fn kmeans_fit<'py>(
+    _py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    k: usize,
+    max_iter: usize,
+    seed: Option<u64>,
+) -> PyResult<KmeansModel> {
+    let vecs = extract_data(data)?;
+
+    let mut builder = Kmeans::new(k).with_max_iter(max_iter);
+    if let Some(s) = seed {
+        builder = builder.with_seed(s);
+    }
+
+    let fit = builder
+        .fit(&vecs)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(KmeansModel {
+        fit,
+        training_data: vecs,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// MiniBatchKmeans -- streaming clustering
+// ---------------------------------------------------------------------------
+
+/// Mini-Batch K-means for streaming / incremental clustering.
+///
+/// Construct with `MiniBatchKmeans(k, seed=None)`, then call
+/// `partial_fit(batch)` to update incrementally.
+#[pyclass(name = "MiniBatchKmeans")]
+struct PyMiniBatchKmeans {
+    inner: MiniBatchKmeans,
+}
+
+#[pymethods]
+impl PyMiniBatchKmeans {
+    /// Create a new Mini-Batch K-means clusterer.
+    ///
+    /// Args:
+    ///     k: Number of clusters.
+    ///     seed: Random seed for reproducibility (default None).
+    #[new]
+    #[pyo3(signature = (k, seed = None))]
+    fn new(k: usize, seed: Option<u64>) -> Self {
+        let mut mbk = MiniBatchKmeans::new(k);
+        if let Some(s) = seed {
+            mbk = mbk.with_seed(s);
+        }
+        Self { inner: mbk }
+    }
+
+    /// Update the model with a batch of points.
+    ///
+    /// The first call initializes centroids via k-means++.
+    /// Subsequent calls refine centroids incrementally.
+    ///
+    /// Args:
+    ///     data: Points as (n, d) numpy array or list of lists.
+    ///
+    /// Returns:
+    ///     numpy.ndarray of cluster labels for this batch (int64).
+    fn partial_fit<'py>(
+        &mut self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray1<i64>>> {
+        let vecs = extract_data(data)?;
+        let labels = self
+            .inner
+            .update_batch(&vecs)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        Ok(labels_to_numpy(py, labels))
+    }
+
+    /// Assign new points to the nearest centroid without updating the model.
+    ///
+    /// Args:
+    ///     data: Points as (n, d) numpy array or list of lists.
+    ///
+    /// Returns:
+    ///     numpy.ndarray of cluster labels (int64).
+    fn predict<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray1<i64>>> {
+        let vecs = extract_data(data)?;
+        let labels = self
+            .inner
+            .predict(&vecs)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        Ok(labels_to_numpy(py, labels))
+    }
+
+    /// Current centroids as (k, d) float64 numpy array.
+    #[getter]
+    fn centroids<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        centroids_to_numpy(py, self.inner.centroids())
+    }
+
+    /// Number of clusters.
+    #[getter]
+    fn n_clusters(&self) -> usize {
+        self.inner.n_clusters()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OPTICS
+// ---------------------------------------------------------------------------
+
+/// Result of OPTICS clustering. Holds the reachability ordering and
+/// supports cluster extraction at different thresholds.
+#[pyclass(name = "OpticsResult")]
+struct PyOpticsResult {
+    inner: OpticsResult,
+}
+
+#[pymethods]
+impl PyOpticsResult {
+    /// Processing order (indices into original data) as int64 numpy array.
+    #[getter]
+    fn ordering<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        let v: Vec<i64> = self.inner.ordering.iter().map(|&i| i as i64).collect();
+        v.into_pyarray(py)
+    }
+
+    /// Reachability distances in ordering order as float64 numpy array.
+    #[getter]
+    fn reachability<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        let v: Vec<f64> = self.inner.reachability.iter().map(|&r| r as f64).collect();
+        v.into_pyarray(py)
+    }
+
+    /// Core distances in ordering order as float64 numpy array.
+    #[getter]
+    fn core_distances<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        let v: Vec<f64> = self.inner.core_distances.iter().map(|&d| d as f64).collect();
+        v.into_pyarray(py)
+    }
+
+    /// Extract DBSCAN-like clusters at a given epsilon threshold.
+    ///
+    /// Args:
+    ///     epsilon: Reachability threshold for cluster extraction.
+    ///
+    /// Returns:
+    ///     numpy.ndarray of cluster labels (int64). Noise = -1.
+    #[pyo3(signature = (epsilon,))]
+    fn extract_clusters<'py>(
+        &self,
+        py: Python<'py>,
+        epsilon: f64,
+    ) -> Bound<'py, PyArray1<i64>> {
+        let labels = Optics::<Euclidean>::extract_clusters(&self.inner, epsilon as f32);
+        labels_to_numpy(py, labels)
+    }
+
+    /// Extract clusters using the Xi method (automatic valley detection).
+    ///
+    /// Args:
+    ///     xi: Steepness parameter in (0, 1). Smaller = fewer, tighter clusters.
+    ///
+    /// Returns:
+    ///     numpy.ndarray of cluster labels (int64). Noise = -1.
+    #[pyo3(signature = (xi,))]
+    fn extract_xi<'py>(
+        &self,
+        py: Python<'py>,
+        xi: f64,
+    ) -> Bound<'py, PyArray1<i64>> {
+        let labels = Optics::<Euclidean>::extract_xi(&self.inner, xi as f32);
+        labels_to_numpy(py, labels)
+    }
+}
+
+/// OPTICS: Ordering Points To Identify the Clustering Structure.
+///
+/// Produces a reachability ordering that can be cut at any threshold to
+/// extract clusters. Unlike DBSCAN, does not require a fixed epsilon.
+///
+/// Args:
+///     data: Points as (n, d) numpy array or list of lists.
+///     max_epsilon: Maximum neighborhood radius.
+///     min_points: Minimum neighbors to form a core point.
+///
+/// Returns:
+///     OpticsResult with .ordering, .reachability, .core_distances,
+///     .extract_clusters(eps), .extract_xi(xi).
+#[pyfunction]
+#[pyo3(signature = (data, max_epsilon, min_points))]
+fn optics<'py>(
+    _py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    max_epsilon: f64,
+    min_points: usize,
+) -> PyResult<PyOpticsResult> {
+    let vecs = extract_data(data)?;
+
+    let result = Optics::new(max_epsilon as f32, min_points)
+        .fit(&vecs)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(PyOpticsResult { inner: result })
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Convert centroids (Vec<Vec<f32>>) to a (k, d) float64 numpy array.
+fn centroids_to_numpy<'py>(
+    py: Python<'py>,
+    centroids: &[Vec<f32>],
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let n_centroids = centroids.len();
+    let d = centroids.first().map(|c| c.len()).unwrap_or(0);
+    let flat: Vec<f64> = centroids
+        .iter()
+        .flat_map(|c| c.iter().map(|&v| v as f64))
+        .collect();
+    numpy::PyArray1::from_vec(py, flat).reshape([n_centroids, d])
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -410,8 +701,15 @@ fn clumppy(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Standard algorithms
     m.add_function(wrap_pyfunction!(kmeans, m)?)?;
+    m.add_function(wrap_pyfunction!(kmeans_fit, m)?)?;
     m.add_function(wrap_pyfunction!(dbscan, m)?)?;
     m.add_function(wrap_pyfunction!(hdbscan, m)?)?;
+    m.add_function(wrap_pyfunction!(optics, m)?)?;
+
+    // Classes
+    m.add_class::<KmeansModel>()?;
+    m.add_class::<PyMiniBatchKmeans>()?;
+    m.add_class::<PyOpticsResult>()?;
 
     // Evaluation metrics
     m.add_function(wrap_pyfunction!(silhouette_score, m)?)?;
