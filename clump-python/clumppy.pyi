@@ -1,4 +1,8 @@
-"""Type stubs for clumppy -- Python bindings to the clump Rust crate."""
+"""Type stubs for clumppy -- Python bindings to the clump Rust crate.
+
+Note: NaN values in numeric data inputs will raise a ValueError.
+The Rust backend validates inputs and rejects NaN before processing.
+"""
 
 from typing import Optional, Union
 
@@ -73,6 +77,115 @@ def kmeans(
     """
     ...
 
+def kmeans_fit(
+    data: Union[NDArray[np.floating], list[list[float]]],
+    k: int,
+    max_iter: int = 300,
+    seed: Optional[int] = None,
+) -> "KmeansModel":
+    """Fit k-means and return a model object with predict capability.
+
+    Args:
+        data: Points as (n, d) array or list of lists.
+        k: Number of clusters.
+        max_iter: Maximum iterations.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        KmeansModel with .labels, .centroids, .inertia, .predict(data).
+    """
+    ...
+
+class KmeansModel:
+    """Fitted k-means model with prediction on new data."""
+
+    @property
+    def labels(self) -> NDArray[np.int64]:
+        """Cluster labels for the training data."""
+        ...
+
+    @property
+    def centroids(self) -> NDArray[np.float64]:
+        """Learned centroids as (k, d) array."""
+        ...
+
+    @property
+    def inertia(self) -> float:
+        """Final WCSS (within-cluster sum of squares)."""
+        ...
+
+    @property
+    def n_iter(self) -> int:
+        """Number of Lloyd iterations executed."""
+        ...
+
+    def predict(
+        self,
+        data: Union[NDArray[np.floating], list[list[float]]],
+    ) -> NDArray[np.int64]:
+        """Assign new points to the nearest learned centroid.
+
+        Args:
+            data: Points as (n, d) array or list of lists.
+
+        Returns:
+            Cluster labels as int64 array.
+        """
+        ...
+
+class MiniBatchKmeans:
+    """Mini-Batch K-means for streaming / incremental clustering."""
+
+    def __init__(self, k: int, seed: Optional[int] = None) -> None:
+        """Create a new Mini-Batch K-means clusterer.
+
+        Args:
+            k: Number of clusters.
+            seed: Random seed for reproducibility.
+        """
+        ...
+
+    def partial_fit(
+        self,
+        data: Union[NDArray[np.floating], list[list[float]]],
+    ) -> NDArray[np.int64]:
+        """Update the model with a batch of points.
+
+        The first call initializes centroids via k-means++.
+        Subsequent calls refine centroids incrementally.
+
+        Args:
+            data: Points as (n, d) array or list of lists.
+
+        Returns:
+            Cluster labels for this batch as int64 array.
+        """
+        ...
+
+    def predict(
+        self,
+        data: Union[NDArray[np.floating], list[list[float]]],
+    ) -> NDArray[np.int64]:
+        """Assign points to nearest centroid without updating the model.
+
+        Args:
+            data: Points as (n, d) array or list of lists.
+
+        Returns:
+            Cluster labels as int64 array.
+        """
+        ...
+
+    @property
+    def centroids(self) -> NDArray[np.float64]:
+        """Current centroids as (k, d) array."""
+        ...
+
+    @property
+    def n_clusters(self) -> int:
+        """Number of clusters."""
+        ...
+
 def dbscan(
     data: Union[NDArray[np.floating], list[list[float]]],
     eps: float,
@@ -106,6 +219,67 @@ def hdbscan(
         Cluster labels as int64 array. Noise points are labeled -1.
     """
     ...
+
+def optics(
+    data: Union[NDArray[np.floating], list[list[float]]],
+    max_epsilon: float,
+    min_points: int,
+) -> "OpticsResult":
+    """OPTICS: Ordering Points To Identify the Clustering Structure.
+
+    Produces a reachability ordering that can be cut at any threshold
+    to extract clusters. Unlike DBSCAN, does not require a fixed epsilon.
+
+    Args:
+        data: Points as (n, d) array or list of lists.
+        max_epsilon: Maximum neighborhood radius.
+        min_points: Minimum neighbors to form a core point.
+
+    Returns:
+        OpticsResult with .ordering, .reachability, .core_distances,
+        .extract_clusters(eps), .extract_xi(xi).
+    """
+    ...
+
+class OpticsResult:
+    """Result of OPTICS clustering with reachability ordering."""
+
+    @property
+    def ordering(self) -> NDArray[np.int64]:
+        """Processing order (indices into original data)."""
+        ...
+
+    @property
+    def reachability(self) -> NDArray[np.float64]:
+        """Reachability distances in ordering order."""
+        ...
+
+    @property
+    def core_distances(self) -> NDArray[np.float64]:
+        """Core distances in ordering order."""
+        ...
+
+    def extract_clusters(self, epsilon: float) -> NDArray[np.int64]:
+        """Extract DBSCAN-like clusters at a given epsilon threshold.
+
+        Args:
+            epsilon: Reachability threshold for cluster extraction.
+
+        Returns:
+            Cluster labels as int64 array. Noise = -1.
+        """
+        ...
+
+    def extract_xi(self, xi: float) -> NDArray[np.int64]:
+        """Extract clusters using the Xi method (automatic valley detection).
+
+        Args:
+            xi: Steepness parameter in (0, 1). Smaller = fewer, tighter clusters.
+
+        Returns:
+            Cluster labels as int64 array. Noise = -1.
+        """
+        ...
 
 def silhouette_score(
     data: Union[NDArray[np.floating], list[list[float]]],
