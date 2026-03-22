@@ -312,8 +312,12 @@ fn calinski_harabasz_score(
     let vecs = extract_data(data)?;
     let labs = extract_labels(labels)?;
 
-    // Compute centroids from labels.
-    let k = labs.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+    // Compute centroids from labels (filter NOISE = usize::MAX).
+    let k = labs.iter().copied()
+        .filter(|&l| l != NOISE)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
     let d = vecs.first().map(|r| r.len()).unwrap_or(0);
     let mut sums = vec![vec![0.0f64; d]; k];
     let mut counts = vec![0usize; k];
@@ -355,8 +359,12 @@ fn davies_bouldin_score(data: &Bound<'_, PyAny>, labels: &Bound<'_, PyAny>) -> P
     let vecs = extract_data(data)?;
     let labs = extract_labels(labels)?;
 
-    // Compute centroids from labels.
-    let k = labs.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+    // Compute centroids from labels (filter NOISE = usize::MAX).
+    let k = labs.iter().copied()
+        .filter(|&l| l != NOISE)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
     let d = vecs.first().map(|r| r.len()).unwrap_or(0);
     let mut sums = vec![vec![0.0f64; d]; k];
     let mut counts = vec![0usize; k];
