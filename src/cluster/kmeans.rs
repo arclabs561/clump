@@ -508,6 +508,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             for s in &mut sums_f64 {
                 s.fill(0.0);
             }
+            #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
             for i in 0..n {
                 let k = labels[i];
                 let row = data.row(i);
