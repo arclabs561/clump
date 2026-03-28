@@ -103,38 +103,11 @@ Also see `edges_from_distances` to build signed edges from a distance matrix.
 
 ## Distance metrics
 
-All algorithms are generic over `DistanceMetric`. Built-in metrics:
-
-| Metric | Formula |
-|--------|---------|
-| `SquaredEuclidean` | `sum((a_i - b_i)^2)` |
-| `Euclidean` | `sqrt(sum((a_i - b_i)^2))` |
-| `CosineDistance` | `1 - cos_sim(a, b)` |
-| `InnerProductDistance` | `-dot(a, b)` |
-| `CompositeDistance` | Weighted sum of metrics |
-
-Use `with_metric` on any algorithm to swap the metric:
-
-```rust
-use clump::{Kmeans, CosineDistance, DistanceMetric};
-
-let labels = Kmeans::with_metric(2, CosineDistance)
-    .with_seed(42)
-    .fit_predict(&data)
-    .unwrap();
-```
-
-Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &[f32], b: &[f32]) -> f32`).
+All algorithms are generic over `DistanceMetric`. Built-in: `SquaredEuclidean`, `Euclidean`, `CosineDistance`, `InnerProductDistance`, `CompositeDistance`. Use `with_metric` on any algorithm to swap. Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &[f32], b: &[f32]) -> f32`).
 
 ## Features
 
-| Feature | Default | Effect |
-|---------|---------|--------|
-| `parallel` | off | Enables Rayon parallelism for k-means and batch operations |
-| `gpu` | off | Metal GPU acceleration for k-means assignment (macOS only) |
-| `serde` | off | Serialize/deserialize for `KmeansFit`, `SignedEdge`, `Constraint`, etc. |
-| `ndarray` | off | Conversion helpers between `Array2<f32>` and clump input format |
-| `simd` | off | SIMD-accelerated distance via [innr](https://crates.io/crates/innr) (NEON/AVX2/AVX-512) |
+Optional features: `parallel` (Rayon), `gpu` (Metal k-means, macOS), `serde`, `ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance).
 
 ## License
 
