@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/clump/badge.svg)](https://docs.rs/clump)
 [![CI](https://github.com/arclabs561/clump/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/clump/actions/workflows/ci.yml)
 
-Clustering algorithms for dense `f32` vectors in Rust. 9 algorithms, SIMD-accelerated, with optional GPU and parallel support.
+Clustering algorithms.
 
 ## Algorithms
 
