@@ -103,7 +103,7 @@ proptest! {
         let labels = Kmeans::new(k).with_seed(42).with_max_iter(3)
             .fit_predict(&data).unwrap();
         let score = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
-        prop_assert!(score >= -1.01 && score <= 1.01,
+        prop_assert!((-1.01..=1.01).contains(&score),
             "silhouette {} not in [-1, 1]", score);
     }
 
@@ -250,9 +250,9 @@ proptest! {
         n_noise in 0usize..10,
     ) {
         let mut labels: Vec<usize> = (0..n_valid).map(|i| i % 3).collect();
-        labels.extend(std::iter::repeat(NOISE).take(n_noise));
+        labels.extend(std::iter::repeat_n(NOISE, n_noise));
         let ratio = cluster::metrics::noise_ratio(&labels);
-        prop_assert!(ratio >= 0.0 && ratio <= 1.0,
+        prop_assert!((0.0..=1.0).contains(&ratio),
             "noise_ratio {} not in [0, 1]", ratio);
     }
 
@@ -265,7 +265,7 @@ proptest! {
         let score = cluster::metrics::silhouette_score_sampled(
             &data, &labels, &Euclidean, 10, 99,
         );
-        prop_assert!(score >= -1.01 && score <= 1.01,
+        prop_assert!((-1.01..=1.01).contains(&score),
             "sampled silhouette {} not in [-1, 1]", score);
     }
 
@@ -468,7 +468,7 @@ proptest! {
     fn noise_aware_silhouette_valid(data in arb_data(15, 2)) {
         let labels = Dbscan::new(1.0, 2).fit_predict(&data).unwrap();
         let score = cluster::metrics::silhouette_score_noise_aware(&data, &labels, &Euclidean);
-        prop_assert!(score >= -1.01 && score <= 1.01,
+        prop_assert!((-1.01..=1.01).contains(&score),
             "noise-aware silhouette {} not in [-1, 1]", score);
     }
 

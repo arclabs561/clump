@@ -2,7 +2,6 @@
 ///
 /// Feeds data in batches and shows how centroids and micro-clusters
 /// evolve over time.
-
 fn main() {
     use clump::{DenStream, MiniBatchKmeans, NOISE};
 

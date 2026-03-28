@@ -457,7 +457,7 @@ mod tests {
             .collect();
         let result = Optics::new(5.0, 3).fit(&data).unwrap();
         assert_eq!(result.ordering.len(), 50);
-        let mut seen = vec![false; 50];
+        let mut seen = [false; 50];
         for &idx in &result.ordering {
             assert!(!seen[idx], "point {idx} visited twice");
             seen[idx] = true;
@@ -532,7 +532,7 @@ mod proptests {
             for (i, &cd) in result.core_distances.iter().enumerate() {
                 if cd != f32::INFINITY {
                     prop_assert!(
-                        cd > 0.0 || cd == 0.0,
+                        cd >= 0.0,
                         "core_distances[{}] = {} should be >= 0 for core points", i, cd
                     );
                 }
@@ -558,11 +558,11 @@ mod proptests {
         ) {
             // Two well-separated blobs with small random perturbation.
             let mut data = Vec::with_capacity(20);
-            for i in 0..10 {
-                data.push(vec![perturbation[i], perturbation[i] + 0.01]);
+            for p in &perturbation[..10] {
+                data.push(vec![*p, *p + 0.01]);
             }
-            for i in 10..20 {
-                data.push(vec![10.0 + perturbation[i], 10.0 + perturbation[i] + 0.01]);
+            for p in &perturbation[10..20] {
+                data.push(vec![10.0 + *p, 10.0 + *p + 0.01]);
             }
 
             let eps = 0.5;

@@ -2,7 +2,6 @@
 ///
 /// Generates two well-separated clusters, fits k-means (with WCSS) and
 /// DBSCAN (with noise detection), then prints results.
-
 fn main() {
     use clump::{Dbscan, Kmeans, NOISE};
 

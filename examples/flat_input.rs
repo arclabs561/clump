@@ -3,7 +3,6 @@
 /// Shows how to pass a contiguous f32 buffer directly to clustering
 /// algorithms without converting to Vec<Vec<f32>>. Also demonstrates
 /// the ndarray adapter (feature-gated).
-
 fn main() {
     use clump::{FlatRef, Kmeans};
 
