@@ -228,6 +228,7 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
 /// metrics fall back to distance computation for Stage 2 candidates).
 ///
 /// O(k^2) centroid-pair precomputation, O(n) scan with per-centroid pruning.
+#[cfg(not(feature = "parallel"))]
 pub(crate) fn geometric_assign<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
@@ -473,6 +474,7 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     }
 }
 
+#[cfg(not(feature = "parallel"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
@@ -613,6 +615,7 @@ pub(crate) fn squared_norms(data: &(impl DataRef + ?Sized)) -> Vec<f32> {
 /// Returns (labels, upper_bounds, lower_bounds) where upper_bounds[i] is the
 /// squared distance from point i to its assigned centroid, and lower_bounds[i]
 /// is the distance to the second-nearest centroid.
+#[cfg(not(feature = "parallel"))]
 pub(crate) fn assign_expanded(
     data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
@@ -789,6 +792,7 @@ pub(crate) fn prim_mst(
             // Parallel update: compute new distances and find min.
             // Each chunk returns its local (best_v, best_val, updates).
             let chunk_size = (n / rayon::current_num_threads().max(1)).max(256);
+            #[allow(clippy::type_complexity)]
             let results: Vec<(usize, f32, Vec<(usize, f32, usize)>)> = (0..n)
                 .collect::<Vec<_>>()
                 .par_chunks(chunk_size)
@@ -945,7 +949,7 @@ mod tests {
     #[test]
     fn prim_mst_triangle() {
         // 3-point complete graph with known MST.
-        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let points = [vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
         let mst = prim_mst(3, |i, j| Euclidean.distance(&points[i], &points[j]));
         assert_eq!(mst.len(), 2, "MST of 3 nodes has 2 edges");
         let total_weight: f32 = mst.iter().map(|(_, _, w)| w).sum();

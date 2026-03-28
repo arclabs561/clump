@@ -182,7 +182,7 @@ fn hdbscan_outlier_scores_finite() {
     let result = Hdbscan::new().fit(&data).unwrap();
     for &s in &result.outlier_scores {
         assert!(s.is_finite(), "outlier score must be finite");
-        assert!(s >= 0.0 && s <= 1.0, "score {} not in [0,1]", s);
+        assert!((0.0..=1.0).contains(&s), "score {} not in [0,1]", s);
     }
 }
 
@@ -416,7 +416,7 @@ fn hdbscan_min_cluster_size_equals_n() {
         .unwrap();
     // min_cluster_size = n: at most one cluster or all noise.
     let non_noise: Vec<_> = labels.iter().filter(|&&l| l != NOISE).collect();
-    assert!(non_noise.len() == 0 || non_noise.len() == 4);
+    assert!(non_noise.is_empty() || non_noise.len() == 4);
 }
 
 #[test]
@@ -1084,7 +1084,7 @@ fn silhouette_single_sample_cluster_is_zero() {
     let score = cluster::metrics::silhouette_score(&data, &labels, &Euclidean);
     // With one singleton, overall silhouette drops but should still be valid.
     assert!(
-        score > -1.01 && score < 1.01,
+        (-1.01..1.01).contains(&score),
         "silhouette out of range: {score}"
     );
 }

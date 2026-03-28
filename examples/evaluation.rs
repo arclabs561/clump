@@ -3,7 +3,6 @@
 ///
 /// Fits k-means for k=2..6 and prints a comparison table, then evaluates
 /// a DBSCAN result with DISCO.
-
 fn main() {
     use clump::cluster::metrics::{
         calinski_harabasz, davies_bouldin, disco_score, silhouette_score,
