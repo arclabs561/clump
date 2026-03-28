@@ -104,10 +104,8 @@ impl<'a, T: DataRef + ?Sized, D: DistanceMetric> ProjIndex<'a, T, D> {
 
         let mut results = Vec::new();
         for (i, &count) in candidate_counts.iter().enumerate() {
-            if count == num_axes as u16 {
-                if self.metric.distance(query, self.data.row(i)) <= radius {
-                    results.push(i);
-                }
+            if count == num_axes as u16 && self.metric.distance(query, self.data.row(i)) <= radius {
+                results.push(i);
             }
         }
         results

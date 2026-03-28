@@ -181,6 +181,7 @@ pub fn calinski_harabasz(
     // Within-cluster dispersion: sum of ||x_i - c_{label(i)}||^2.
     // Skip noise points to avoid index-out-of-bounds.
     let mut within = 0.0f64;
+    #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
     for i in 0..n {
         let l = labels[i];
         if l == noise || l >= k {
@@ -230,6 +231,7 @@ pub fn davies_bouldin<D: DistanceMetric>(
     let noise = super::dbscan::NOISE;
     let mut intra_sum = vec![0.0f64; k];
     let mut sizes = vec![0usize; k];
+    #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
     for i in 0..data.n() {
         let ci = labels[i];
         if ci == noise || ci >= k {
@@ -555,7 +557,7 @@ pub fn disco_score<D: DistanceMetric>(
     // Single cluster with no noise -> 0.0 (no inter-cluster comparison possible).
     if !has_multiple_clusters {
         // Check if there are noise points to score.
-        let has_noise = labels.iter().any(|&l| l == noise);
+        let has_noise = labels.contains(&noise);
         if !has_noise {
             return 0.0;
         }
@@ -664,6 +666,8 @@ pub fn disco_score<D: DistanceMetric>(
         // Find nearest cluster by mean MRD.
         let mut best_cluster = 0usize;
         let mut best_mean = f64::MAX;
+        #[allow(clippy::needless_range_loop)]
+        // c indexes cluster_sizes and iterates cluster members
         for c in 0..k {
             if cluster_sizes[c] == 0 {
                 continue;

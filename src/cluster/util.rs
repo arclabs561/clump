@@ -240,6 +240,7 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
     let k = centroids.len();
 
     if first_iter || k <= 1 {
+        #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
         for i in 0..n {
             let mut best = f32::MAX;
             let mut best_k = 0;
@@ -278,6 +279,7 @@ pub(crate) fn geometric_assign<D: DistanceMetric>(
         Vec::new()
     };
 
+    #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
     for i in 0..n {
         let a = labels[i];
         let a_shift = centroid_shifts[a];
