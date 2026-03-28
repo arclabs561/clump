@@ -7,3 +7,4 @@ Cargo.lock
 clump-python/target/
 clump-python/.venv/
 clump-python/Cargo.lock
+proptest-regressions/
