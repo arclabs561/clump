@@ -955,7 +955,7 @@ mod tests {
         assert!((fit.centroids[0][1] - 7.0).abs() < 1e-6);
     }
 
-    /// WCSS must be strictly better than random assignment.
+    /// WCSS must be strictly better than a random-centroid baseline.
     #[test]
     fn wcss_better_than_random() {
         use rand::prelude::*;
@@ -970,19 +970,29 @@ mod tests {
         let fit = Kmeans::new(2).with_seed(42).fit(&data).unwrap();
         let kmeans_wcss = fit.wcss(&data);
 
-        // Random assignment.
+        // Random baseline: pick 2 random data points as centroids, assign each
+        // point to its nearest random centroid, compute WCSS. This uses actual
+        // random centroids rather than k-means centroids with shuffled labels,
+        // so the comparison is against genuinely uninformed placement.
+        let mut rng2 = StdRng::seed_from_u64(99);
+        let idx_a = rng2.random_range(0..data.len());
+        let idx_b = loop {
+            let idx = rng2.random_range(0..data.len());
+            if idx != idx_a { break idx; }
+        };
+        let rand_centroids = [&data[idx_a], &data[idx_b]];
         let random_wcss: f32 = data
             .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let label = i % 2;
-                SquaredEuclidean.distance(p, &fit.centroids[label])
+            .map(|p| {
+                let d0 = SquaredEuclidean.distance(p, rand_centroids[0]);
+                let d1 = SquaredEuclidean.distance(p, rand_centroids[1]);
+                d0.min(d1)
             })
             .sum();
 
         assert!(
             kmeans_wcss < random_wcss,
-            "k-means WCSS ({kmeans_wcss}) should be less than random ({random_wcss})"
+            "k-means WCSS ({kmeans_wcss}) should be less than random-centroid baseline ({random_wcss})"
         );
     }
 

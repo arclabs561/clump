@@ -206,12 +206,17 @@ fn optics_all_identical() {
 
 #[test]
 fn optics_extract_at_zero_eps() {
+    // Three points: [0,0], [0.1,0], [10,10]. min_pts=2 so core distance for
+    // [0,0] is ~0.1 (its nearest neighbour). With extraction eps=0.001, all
+    // reachability distances exceed 0.001, so every point should be noise.
     let data = vec![vec![0.0, 0.0], vec![0.1, 0.0], vec![10.0, 10.0]];
     let result = Optics::new(100.0, 2).fit(&data).unwrap();
     let labels = Optics::<Euclidean>::extract_clusters(&result, 0.001);
-    // Very small eps: most/all points should be noise.
     let non_noise = labels.iter().filter(|&&l| l != NOISE).count();
-    assert!(non_noise <= labels.len()); // always true, documents intent
+    assert_eq!(
+        non_noise, 0,
+        "eps=0.001 is below all pairwise distances: all points must be noise"
+    );
 }
 
 // ============================================================================
@@ -779,34 +784,46 @@ fn metrics_with_one_cluster_returns_zero() {
 
 #[test]
 fn denstream_base2_decay_rate() {
-    // After lambda * elapsed = 1 unit, weight should halve (base-2 decay).
-    let mut ds = DenStream::new(100.0, 2)
-        .with_beta(0.01)
-        .with_lambda(1.0) // decay factor
+    // Verify that decay drives cluster pruning.
+    //
+    // With lambda=1.0 and beta=0.5, mu=1.0, the prune threshold is beta*mu=0.5.
+    // A freshly created cluster starts at weight=1.0. After 2 time steps its
+    // weight is 2^(-1.0*2) = 0.25 < 0.5, so it must be pruned on the next
+    // prune pass.
+    //
+    // Strategy: seed one origin cluster, then feed t_p far-away points (each
+    // becomes its own isolated outlier or p-cluster far from origin) so that
+    // a prune fires. After pruning, the origin cluster should be gone because
+    // its weight decayed below the threshold.
+    //
+    // t_p=5 means prune fires after every 5 updates.
+    let t_p = 5usize;
+    let mut ds = DenStream::new(0.5, 2) // tight epsilon: far-away points won't merge
+        .with_beta(0.5)
+        .with_lambda(1.0)
         .with_mu(1.0)
-        .with_pruning_period(100_000);
+        .with_pruning_period(t_p);
 
-    // Feed one point.
+    // Seed origin cluster.
     ds.update(&[0.0, 0.0]).unwrap();
 
-    // Feed many points far away to advance time without merging.
-    for i in 1..=10 {
+    // Feed t_p far-away points to trigger a prune pass. Each is placed at a
+    // distinct large coordinate so none merges into the origin cluster.
+    for i in 1..=(t_p as i32) {
         ds.update(&[1000.0 * i as f32, 0.0]).unwrap();
     }
 
-    // The original cluster's centroid should still be near (0,0)
-    // but its weight should have decayed significantly.
+    // After t_p+1 updates (1 seed + t_p far points), a prune has fired.
+    // The origin cluster has aged t_p steps: weight = 2^(-1.0*t_p) ≈ 0.031 < 0.5.
+    // It must have been pruned.
     let centroids = ds.centroids();
-    let has_origin = centroids.iter().any(|c| c[0].abs() < 1.0);
-    // With lambda=1.0 and ~10 time steps, 2^(-1*10) is very small.
-    // The cluster may have been pruned entirely.
-    // What matters is that the function doesn't panic and clusters are valid.
-    assert!(ds.n_clusters() >= 1, "should have at least 1 cluster");
-    if has_origin {
-        // If the origin cluster survived, its centroid is still near 0.
-        let origin_cluster = centroids.iter().find(|c| c[0].abs() < 1.0).unwrap();
-        assert!(origin_cluster[0].abs() < 1.0);
-    }
+    let has_origin = centroids.iter().any(|c| c[0].abs() < 1.0 && c[1].abs() < 1.0);
+    assert!(
+        !has_origin,
+        "origin cluster should be pruned after decaying below beta*mu threshold; \
+         remaining centroids: {:?}",
+        centroids
+    );
 }
 
 // ============================================================================
