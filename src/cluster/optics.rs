@@ -615,14 +615,8 @@ mod xi_tests {
         assert_eq!(labels.len(), 20);
 
         // Find any non-noise label representative from each half.
-        let first_half_label = labels[0..10]
-            .iter()
-            .find(|&&l| l != crate::NOISE)
-            .copied();
-        let second_half_label = labels[10..20]
-            .iter()
-            .find(|&&l| l != crate::NOISE)
-            .copied();
+        let first_half_label = labels[0..10].iter().find(|&&l| l != crate::NOISE).copied();
+        let second_half_label = labels[10..20].iter().find(|&&l| l != crate::NOISE).copied();
 
         assert!(
             first_half_label.is_some(),

@@ -817,7 +817,9 @@ fn denstream_base2_decay_rate() {
     // The origin cluster has aged t_p steps: weight = 2^(-1.0*t_p) ≈ 0.031 < 0.5.
     // It must have been pruned.
     let centroids = ds.centroids();
-    let has_origin = centroids.iter().any(|c| c[0].abs() < 1.0 && c[1].abs() < 1.0);
+    let has_origin = centroids
+        .iter()
+        .any(|c| c[0].abs() < 1.0 && c[1].abs() < 1.0);
     assert!(
         !has_origin,
         "origin cluster should be pruned after decaying below beta*mu threshold; \
