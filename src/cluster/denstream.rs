@@ -831,7 +831,10 @@ mod tests {
         for &t in &t_steps {
             let mut mc = MicroCluster::new(&[0.0, 0.0], 0);
             // Weight starts at 1.0 at timestamp 0.
-            assert!((mc.weight - 1.0).abs() < 1e-12, "initial weight should be 1.0");
+            assert!(
+                (mc.weight - 1.0).abs() < 1e-12,
+                "initial weight should be 1.0"
+            );
 
             // Advance time by t without absorbing any points.
             mc.decay(lambda, t);
@@ -842,7 +845,8 @@ mod tests {
             assert!(
                 (mc.weight - expected).abs() < 1e-6,
                 "weight after {t} steps with lambda={lambda}: got {}, expected {}",
-                mc.weight, expected
+                mc.weight,
+                expected
             );
         }
     }

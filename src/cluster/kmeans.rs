@@ -978,7 +978,9 @@ mod tests {
         let idx_a = rng2.random_range(0..data.len());
         let idx_b = loop {
             let idx = rng2.random_range(0..data.len());
-            if idx != idx_a { break idx; }
+            if idx != idx_a {
+                break idx;
+            }
         };
         let rand_centroids = [&data[idx_a], &data[idx_b]];
         let random_wcss: f32 = data
