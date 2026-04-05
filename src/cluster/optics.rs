@@ -593,7 +593,10 @@ mod xi_tests {
 
     #[test]
     fn xi_two_clusters() {
-        // Two well-separated clusters: Xi should find 2 valleys.
+        // Two well-separated clusters: Xi should assign non-noise labels such
+        // that points from the first group (indices 0-9, near origin) get a
+        // different cluster label from points in the second group
+        // (indices 10-19, near (20, 20)).
         let mut data = Vec::new();
         for i in 0..10 {
             data.push(vec![(i % 3) as f32 * 0.1, (i / 3) as f32 * 0.1]);
@@ -610,15 +613,33 @@ mod xi_tests {
         let labels = Optics::<Euclidean>::extract_xi(&result, 0.1);
 
         assert_eq!(labels.len(), 20);
-        let non_noise: std::collections::HashSet<usize> = labels
+
+        // Find any non-noise label representative from each half.
+        let first_half_label = labels[0..10]
             .iter()
-            .copied()
-            .filter(|&l| l != crate::NOISE)
-            .collect();
+            .find(|&&l| l != crate::NOISE)
+            .copied();
+        let second_half_label = labels[10..20]
+            .iter()
+            .find(|&&l| l != crate::NOISE)
+            .copied();
+
         assert!(
-            non_noise.len() >= 2,
-            "Xi should find at least 2 clusters, found {}",
-            non_noise.len()
+            first_half_label.is_some(),
+            "at least one point in the first cluster (indices 0-9) should be non-noise"
+        );
+        assert!(
+            second_half_label.is_some(),
+            "at least one point in the second cluster (indices 10-19) should be non-noise"
+        );
+        assert_ne!(
+            first_half_label.unwrap(),
+            second_half_label.unwrap(),
+            "the two well-separated groups must get different cluster labels, \
+             got {:?} and {:?}; all labels: {:?}",
+            first_half_label,
+            second_half_label,
+            labels
         );
     }
 

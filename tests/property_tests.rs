@@ -515,16 +515,24 @@ proptest! {
         }
     }
 
-    // Both the geometric path (k<=20) and Hamerly path (k>20) must satisfy
-    // the nearest-centroid invariant. Test k=5 (geometric) and k=25 (Hamerly).
+    // Both the geometric path and the Hamerly path must satisfy the
+    // nearest-centroid invariant.
+    //
+    // Dispatch in the non-parallel build (the default for tests):
+    //   k <= 64  -> geometric_assign (Gk-means three-stage filter)
+    //   k >  64  -> hamerly_assign
+    //
+    // k=5 exercises the geometric path; k=65 exercises the Hamerly path.
+    // The `if k > data.len() { continue; }` guard skips cases where the data
+    // is too small to form k clusters.
     #[test]
     fn kmeans_geometric_vs_hamerly_nearest(
         data in proptest::collection::vec(
             proptest::collection::vec(-50.0f32..50.0, 4..=4),
-            30..=60
+            70..=100
         ),
     ) {
-        for k in [5usize, 25] {
+        for k in [5usize, 65] {
             if k > data.len() { continue; }
             let fit = Kmeans::new(k).with_seed(7).with_max_iter(50)
                 .fit(&data).unwrap();

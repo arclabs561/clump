@@ -816,6 +816,36 @@ mod tests {
         let has_near_10 = centroids.iter().any(|c| c[0] > 5.0 && c[1] > 5.0);
         assert!(has_near_10, "centroid should track recent (10,10) points");
     }
+
+    /// Verify that MicroCluster weight after t decay steps with factor lambda
+    /// matches the formula 2^(-lambda * t) within floating-point tolerance.
+    ///
+    /// This test accesses the private `weight` field directly; it lives in the
+    /// module's test block rather than in the integration test suite because
+    /// MicroCluster is not pub(crate).
+    #[test]
+    fn denstream_weight_decay_invariant() {
+        let lambda = 0.5_f64;
+        let t_steps = [1u64, 2, 5, 10];
+
+        for &t in &t_steps {
+            let mut mc = MicroCluster::new(&[0.0, 0.0], 0);
+            // Weight starts at 1.0 at timestamp 0.
+            assert!((mc.weight - 1.0).abs() < 1e-12, "initial weight should be 1.0");
+
+            // Advance time by t without absorbing any points.
+            mc.decay(lambda, t);
+
+            let expected = 2.0_f64.powf(-lambda * t as f64);
+            // Tolerance accounts for the f32 intermediate in apply_decay
+            // (`decay` is computed as f32 before being cast back to f64).
+            assert!(
+                (mc.weight - expected).abs() < 1e-6,
+                "weight after {t} steps with lambda={lambda}: got {}, expected {}",
+                mc.weight, expected
+            );
+        }
+    }
 }
 
 #[cfg(test)]
