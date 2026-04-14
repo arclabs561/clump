@@ -229,15 +229,20 @@ impl<D: DistanceMetric> Dbscan<D> {
             return neighbors;
         }
 
+        // Use a fixed-size array instead of Vec to avoid per-iteration heap
+        // allocation. d <= 8 is guaranteed by the early-return above.
+        let mut cell_buf = [0i64; 8];
+        cell_buf[..d].copy_from_slice(&center_cell);
+
         let n_adjacent = 3i64.pow(d as u32);
         for offset_idx in 0..n_adjacent {
-            let mut cell = center_cell.clone();
+            let mut cell = cell_buf;
             let mut idx = offset_idx;
-            for c in cell.iter_mut().take(d) {
+            for c in cell[..d].iter_mut() {
                 *c += (idx % 3) - 1;
                 idx /= 3;
             }
-            if let Some(points) = grid.get(&cell) {
+            if let Some(points) = grid.get(&cell[..d]) {
                 for &j in points {
                     if j != point_idx && self.metric.distance(point, data.row(j)) <= self.epsilon {
                         neighbors.push(j);

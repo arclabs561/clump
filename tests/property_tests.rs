@@ -463,6 +463,67 @@ proptest! {
         }
     }
 
+    /// EVoC: all labels are either None (noise) or a valid cluster ID in 0..n.
+    #[test]
+    fn evoc_all_labels_valid_or_noise(data in arb_data(15, 4)) {
+        let mut evoc = EVoC::new(EVoCParams {
+            intermediate_dim: 2,
+            min_cluster_size: 2,
+            seed: Some(42),
+            ..Default::default()
+        });
+        let labels = evoc.fit_predict(&data).unwrap();
+        prop_assert_eq!(labels.len(), data.len());
+        for (i, label) in labels.iter().enumerate() {
+            if let Some(cid) = label {
+                prop_assert!(
+                    *cid < data.len(),
+                    "point {} has cluster_id {} >= n={}",
+                    i,
+                    cid,
+                    data.len()
+                );
+            }
+        }
+    }
+
+    /// EVoC: number of distinct clusters (excluding noise) is <= n.
+    #[test]
+    fn evoc_cluster_count_le_n(data in arb_data(15, 4)) {
+        let mut evoc = EVoC::new(EVoCParams {
+            intermediate_dim: 2,
+            min_cluster_size: 2,
+            seed: Some(42),
+            ..Default::default()
+        });
+        let labels = evoc.fit_predict(&data).unwrap();
+        let n = data.len();
+        let distinct: std::collections::HashSet<usize> = labels
+            .iter()
+            .filter_map(|l| *l)
+            .collect();
+        prop_assert!(
+            distinct.len() <= n,
+            "cluster count {} exceeds n={}",
+            distinct.len(),
+            n
+        );
+    }
+
+    /// EVoC: same seed produces identical labels (determinism).
+    #[test]
+    fn evoc_deterministic_with_seed(data in arb_data(15, 4)) {
+        let params = EVoCParams {
+            intermediate_dim: 2,
+            min_cluster_size: 2,
+            seed: Some(99),
+            ..Default::default()
+        };
+        let labels1 = EVoC::new(params.clone()).fit_predict(&data).unwrap();
+        let labels2 = EVoC::new(params).fit_predict(&data).unwrap();
+        prop_assert_eq!(labels1, labels2, "EVoC must be deterministic with the same seed");
+    }
+
     /// Noise-aware silhouette excludes noise and returns valid range.
     #[test]
     fn noise_aware_silhouette_valid(data in arb_data(15, 2)) {
