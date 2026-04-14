@@ -27,6 +27,12 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets --features parallel,simd,serde,ndarray,blas -- -D warnings
 
+      - name: Semver check
+        if: github.event_name == 'pull_request'
+        run: |
+          cargo install cargo-semver-checks --locked || true
+          cargo semver-checks
+
   test-macos:
     runs-on: macos-latest
     steps:
