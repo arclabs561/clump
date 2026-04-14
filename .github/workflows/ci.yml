@@ -60,7 +60,7 @@ jobs:
           toolchain: "1.70.0"
       - uses: Swatinem/rust-cache@v2
       - name: check (MSRV 1.70)
-        run: cargo check
+        run: rm -f Cargo.lock && cargo check
 
   bench:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
