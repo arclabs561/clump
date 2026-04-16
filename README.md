@@ -6,6 +6,8 @@
 
 Clustering algorithms.
 
+Includes HDBSCAN, COP-Kmeans (constrained), DenStream (streaming), EVoC, and Correlation Clustering — algorithms not offered by linfa-clustering.
+
 ## Algorithms
 
 | Algorithm | Kind | Discovers k | Noise handling | Input |
@@ -108,6 +110,10 @@ All algorithms are generic over `DistanceMetric`. Built-in: `SquaredEuclidean`, 
 ## Features
 
 Optional features: `parallel` (Rayon), `gpu` (Metal k-means, macOS), `serde`, `ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance).
+
+## Benchmarks
+
+`benches/comparison.rs` has head-to-head scaffolding against linfa-clustering for k-means and DBSCAN. Comparative numbers across all algorithms are a TODO — the algorithms are implemented and tested, but aggregate results haven't been run and recorded yet.
 
 ## License
 
