@@ -2,7 +2,7 @@
 //!
 //! Based on Saha et al. (2023), "End-to-End Differentiable Clustering with AM".
 //!
-//! Requires the `rkhs` feature: `clump = { version = "...", features = ["rkhs"] }`.
+//! Requires the `hopfield` feature: `clump = { version = "...", features = ["hopfield"] }`.
 //!
 //! ## Overview
 //!
@@ -94,7 +94,7 @@ pub fn am_soft_assign(data: &[Vec<f64>], centroids: &[Vec<f64>], beta: f64) -> V
 
 /// Contract a point toward centroids using AM energy descent.
 ///
-/// Uses the Log-Sum-Exp (LSE) energy from [`rkhs`]: gradient descent on
+/// Uses the Log-Sum-Exp (LSE) energy from [`hopfield`]: gradient descent on
 /// `E_β(v; Ξ) = -log Σ_μ exp(-β/2 ||v - ξ^μ||²)` converges toward the
 /// nearest centroid attractor.
 ///
@@ -124,10 +124,10 @@ pub fn am_contract(
     steps: usize,
     lr: f64,
 ) -> Vec<f64> {
-    let (contracted, _) = rkhs::retrieve_memory(
+    let (contracted, _) = hopfield::retrieve_memory(
         point.to_vec(),
         centroids,
-        |v, m| rkhs::energy_lse_grad(v, m, beta),
+        |v, m| hopfield::energy_lse_grad(v, m, beta),
         lr,
         steps,
         1e-10,
