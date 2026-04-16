@@ -360,6 +360,12 @@ fn extract_clusters(
     let mut comp_cluster: Vec<Option<usize>> = vec![None; n];
     let mut condensed: Vec<CondensedEdge> = Vec::new();
 
+    // Track component members by root index so add_point_fallouts is O(comp_size)
+    // instead of O(n). Each entry is the list of point indices whose root is `r`.
+    // Maintained in sync with union operations via union-by-size: on union(big, small),
+    // we move small's list into big's list (O(small_size) total work is amortized O(n log n)).
+    let mut comp_members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+
     for &(u, v, dist) in mst {
         let ru = uf.find(u);
         let rv = uf.find(v);
@@ -411,13 +417,27 @@ fn extract_clusters(
             // Also record individual point fallouts for the children if they
             // had no prior cluster (all their points are "born" into the child).
             if comp_cluster[ru].is_none() {
-                add_point_fallouts(&mut condensed, &uf, ru, left_child, lambda, n);
+                for &p in &comp_members[ru] {
+                    condensed.push(CondensedEdge {
+                        parent: left_child,
+                        child: p,
+                        lambda,
+                        child_size: 1,
+                    });
+                }
             }
             if comp_cluster[rv].is_none() {
-                add_point_fallouts(&mut condensed, &uf, rv, right_child, lambda, n);
+                for &p in &comp_members[rv] {
+                    condensed.push(CondensedEdge {
+                        parent: right_child,
+                        child: p,
+                        lambda,
+                        child_size: 1,
+                    });
+                }
             }
 
-            let new_root = uf.union_roots(ru, rv);
+            let new_root = union_with_members(&mut uf, &mut comp_members, ru, rv);
             comp_cluster[new_root] = Some(new_cluster);
         } else if left_big || right_big {
             let (big, small) = if left_big { (ru, rv) } else { (rv, ru) };
@@ -427,19 +447,33 @@ fn extract_clusters(
                 let id = next_cluster_id;
                 next_cluster_id += 1;
                 // Record all existing big-component points as born into this cluster.
-                add_point_fallouts(&mut condensed, &uf, big, id, lambda, n);
+                for &p in &comp_members[big] {
+                    condensed.push(CondensedEdge {
+                        parent: id,
+                        child: p,
+                        lambda,
+                        child_size: 1,
+                    });
+                }
                 id
             });
 
             // Small side's points fall out.
-            add_point_fallouts(&mut condensed, &uf, small, cluster, lambda, n);
+            for &p in &comp_members[small] {
+                condensed.push(CondensedEdge {
+                    parent: cluster,
+                    child: p,
+                    lambda,
+                    child_size: 1,
+                });
+            }
 
-            let new_root = uf.union_roots(big, small);
+            let new_root = union_with_members(&mut uf, &mut comp_members, big, small);
             comp_cluster[new_root] = Some(cluster);
         } else {
             // Neither is large. Just merge; no cluster event.
             let existing = comp_cluster[ru].or(comp_cluster[rv]);
-            let new_root = uf.union_roots(ru, rv);
+            let new_root = union_with_members(&mut uf, &mut comp_members, ru, rv);
             comp_cluster[new_root] = existing;
         }
     }
@@ -681,32 +715,27 @@ fn assign_owner(
     }
 }
 
-/// Add individual point fallouts for all points in the component rooted at `comp_root`.
-fn add_point_fallouts(
-    condensed: &mut Vec<CondensedEdge>,
-    uf: &UnionFind,
-    comp_root: usize,
-    parent_cluster: usize,
-    lambda: f64,
-    n: usize,
-) {
-    for p in 0..n {
-        if find_root_readonly(&uf.parent, p) == comp_root {
-            condensed.push(CondensedEdge {
-                parent: parent_cluster,
-                child: p,
-                lambda,
-                child_size: 1,
-            });
-        }
-    }
-}
-
-fn find_root_readonly(parent: &[usize], mut x: usize) -> usize {
-    while parent[x] != x {
-        x = parent[x];
-    }
-    x
+/// Union two components by root, maintaining comp_members in sync.
+///
+/// Merges the smaller member list into the larger (union-by-size) and returns
+/// the new root. The smaller component's member list is left empty after the merge.
+fn union_with_members(
+    uf: &mut UnionFind,
+    comp_members: &mut Vec<Vec<usize>>,
+    ra: usize,
+    rb: usize,
+) -> usize {
+    // Determine which is big and small (mirrors UnionFind::union_roots).
+    let (big, small) = if uf.size[ra] >= uf.size[rb] {
+        (ra, rb)
+    } else {
+        (rb, ra)
+    };
+    // Move small's members into big's list.
+    let small_members = std::mem::take(&mut comp_members[small]);
+    comp_members[big].extend(small_members);
+    // Perform the union.
+    uf.union_roots(ra, rb)
 }
 
 /// Label all points belonging to cluster `cluster_idx` (and non-selected descendants).

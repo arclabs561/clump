@@ -639,10 +639,18 @@ pub(crate) fn assign_expanded(
         let mut second_dist = f32::MAX;
         let mut best_k = 0;
 
+        let point = data.row(i);
         for j in 0..k {
             let cn = centroid_norms[j];
             let c_slice = &flat_c[j * dim..(j + 1) * dim];
-            let dot: f32 = data.row(i).iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
+            #[cfg(feature = "simd")]
+            let dot = if dim >= 16 {
+                innr::dot(point, c_slice)
+            } else {
+                point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum()
+            };
+            #[cfg(not(feature = "simd"))]
+            let dot: f32 = point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
             let dist = (xn + cn - 2.0 * dot).max(0.0);
             if dist < best_dist {
                 second_dist = best_dist;
@@ -687,6 +695,13 @@ pub(crate) fn assign_expanded_parallel(
             for j in 0..k {
                 let cn = centroid_norms[j];
                 let c_slice = &flat_c[j * dim..(j + 1) * dim];
+                #[cfg(feature = "simd")]
+                let dot = if dim >= 16 {
+                    innr::dot(point, c_slice)
+                } else {
+                    point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum()
+                };
+                #[cfg(not(feature = "simd"))]
                 let dot: f32 = point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
                 let dist = (xn + cn - 2.0 * dot).max(0.0);
                 if dist < best_dist {
