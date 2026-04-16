@@ -19,6 +19,9 @@
 #![cfg_attr(any(feature = "gpu", feature = "blas"), deny(unsafe_code))]
 #![warn(missing_docs)]
 
+/// CLAM: Clustering with Associative Memory helpers (requires `rkhs` feature).
+#[cfg(feature = "rkhs")]
+pub mod clam;
 pub mod cluster;
 /// Error types for clustering operations.
 pub mod error;
