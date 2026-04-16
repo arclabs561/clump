@@ -20,6 +20,7 @@ matrixmultiply = { version = "0.3", optional = true }
 rayon = { version = "1.10", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 ndarray = { version = "0.16", optional = true }
+rkhs = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.33", optional = true }
@@ -33,6 +34,7 @@ serde = ["dep:serde"]
 ndarray = ["dep:ndarray"]
 simd = ["dep:innr"]
 blas = ["dep:matrixmultiply"]
+rkhs = ["dep:rkhs"]
 
 [dev-dependencies]
 criterion = "0.7"
