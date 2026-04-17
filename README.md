@@ -6,7 +6,6 @@
 
 Clustering algorithms.
 
-Includes HDBSCAN, COP-Kmeans (constrained), DenStream (streaming), EVoC, and Correlation Clustering — algorithms not offered by linfa-clustering.
 
 ## Algorithms
 
@@ -26,7 +25,7 @@ Includes HDBSCAN, COP-Kmeans (constrained), DenStream (streaming), EVoC, and Cor
 
 ```toml
 [dependencies]
-clump = "0.5.2"
+clump = "0.5.5"
 ```
 
 ```rust
@@ -110,6 +109,20 @@ All algorithms are generic over `DistanceMetric`. Built-in: `SquaredEuclidean`, 
 ## Features
 
 Optional features: `parallel` (Rayon), `gpu` (Metal k-means, macOS), `serde`, `ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance).
+
+## Examples
+
+| Example | What it shows |
+|---------|---------------|
+| `quickstart` | K-means and DBSCAN on synthetic data |
+| `clustering` | Multiple algorithms on the same dataset, label comparison |
+| `streaming` | Mini-Batch K-means and DenStream on streaming data |
+| `evaluation` | Silhouette score, cluster quality metrics |
+| `flat_input` | Zero-copy `FlatRef` input from raw `&[f32]` |
+
+```sh
+cargo run --example quickstart
+```
 
 ## Benchmarks
 
