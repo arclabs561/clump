@@ -547,7 +547,7 @@ fn extract_layers(
         .collect();
 
     // Sort by granularity (finest first).
-    layers_out.sort_by(|a, b| b.num_clusters.cmp(&a.num_clusters));
+    layers_out.sort_by_key(|b| std::cmp::Reverse(b.num_clusters));
     layers_out
 }
 

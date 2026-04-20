@@ -721,7 +721,7 @@ fn assign_owner(
 /// the new root. The smaller component's member list is left empty after the merge.
 fn union_with_members(
     uf: &mut UnionFind,
-    comp_members: &mut Vec<Vec<usize>>,
+    comp_members: &mut [Vec<usize>],
     ra: usize,
     rb: usize,
 ) -> usize {

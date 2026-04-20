@@ -1,6 +1,6 @@
 [package]
 name = "clump"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Dense clustering primitives (k-means, DBSCAN, HDBSCAN, EVoC, COP-Kmeans, DenStream, correlation clustering)"
