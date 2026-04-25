@@ -68,7 +68,9 @@ pub mod denstream;
 pub mod distance;
 mod evoc;
 pub mod flat;
-#[cfg(feature = "gpu")]
+// `gpu` feature pulls in `metal` which is macOS-only; gate the module on both
+// the feature and the target so `--all-features` works on Linux CI.
+#[cfg(all(feature = "gpu", target_os = "macos"))]
 pub(crate) mod gpu;
 mod hdbscan;
 mod kmeans;
