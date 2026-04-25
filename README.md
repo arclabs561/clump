@@ -4,8 +4,16 @@
 [![Documentation](https://docs.rs/clump/badge.svg)](https://docs.rs/clump)
 [![CI](https://github.com/arclabs561/clump/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/clump/actions/workflows/ci.yml)
 
-Clustering algorithms.
+Clustering algorithms in Rust: K-means and mini-batch K-means,
+DBSCAN / HDBSCAN / OPTICS, EVoC for hierarchical, DenStream for
+streaming, and COP-Kmeans for constrained variants.
 
+```rust
+use clump::Dbscan;
+
+let data = vec![vec![0.0, 0.0], vec![0.1, 0.1], vec![10.0, 10.0]];
+let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+```
 
 ## Algorithms
 
