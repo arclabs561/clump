@@ -360,7 +360,7 @@ impl<D: DistanceMetric> Kmeans<D> {
         // when using SquaredEuclidean and problem is large enough to amortize
         // GPU setup overhead. Buffers for data, labels, and params are allocated
         // once here and reused across iterations.
-        #[cfg(feature = "gpu")]
+        #[cfg(all(feature = "gpu", target_os = "macos"))]
         let gpu_assigner = if self.metric.supports_expanded_form() && n * self.k >= 500_000 {
             let data_flat = super::gpu::flatten(data);
             super::gpu::GpuAssigner::new(&data_flat, n, self.k, d)
@@ -415,7 +415,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             #[cfg(not(feature = "blas"))]
             let blas_used = false;
 
-            #[cfg(feature = "gpu")]
+            #[cfg(all(feature = "gpu", target_os = "macos"))]
             let gpu_used = if !blas_used {
                 if let Some(ref assigner) = gpu_assigner {
                     let centroids_flat = super::gpu::flatten(&centroids);
@@ -428,7 +428,7 @@ impl<D: DistanceMetric> Kmeans<D> {
             } else {
                 false
             };
-            #[cfg(not(feature = "gpu"))]
+            #[cfg(not(all(feature = "gpu", target_os = "macos")))]
             let gpu_used = blas_used; // skip Hamerly if BLAS handled it
 
             if !gpu_used {
