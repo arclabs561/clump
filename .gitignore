@@ -8,3 +8,6 @@ clump-python/target/
 clump-python/.venv/
 clump-python/Cargo.lock
 proptest-regressions/
+
+# cargo-semver-checks-action scratch dir (publish workflow)
+/semver-checks/
