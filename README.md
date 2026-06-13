@@ -33,7 +33,7 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 
 ```toml
 [dependencies]
-clump = "0.5.5"
+clump = "0.5.7"
 ```
 
 ```rust
