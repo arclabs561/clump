@@ -2,6 +2,8 @@
 Cargo.lock
 /.cursor/
 /.claude/
+# Real datasets fetched by scripts/fetch_*.sh (examples only)
+/data/
 
 # Python bindings build artifacts
 clump-python/target/
