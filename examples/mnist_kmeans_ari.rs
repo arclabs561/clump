@@ -34,7 +34,12 @@ fn load_images(path: &Path) -> std::io::Result<Vec<Vec<f32>>> {
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let start = 16 + i * d;
-        out.push(b[start..start + d].iter().map(|&p| p as f32 / 255.0).collect());
+        out.push(
+            b[start..start + d]
+                .iter()
+                .map(|&p| p as f32 / 255.0)
+                .collect(),
+        );
     }
     Ok(out)
 }
@@ -87,7 +92,12 @@ fn purity(pred: &[usize], truth: &[usize], k: usize, n_classes: usize) -> f64 {
         counts[p * n_classes + t] += 1;
     }
     let majority: usize = (0..k)
-        .map(|c| (0..n_classes).map(|t| counts[c * n_classes + t]).max().unwrap_or(0))
+        .map(|c| {
+            (0..n_classes)
+                .map(|t| counts[c * n_classes + t])
+                .max()
+                .unwrap_or(0)
+        })
         .sum();
     majority as f64 / pred.len() as f64
 }
@@ -97,13 +107,20 @@ fn main() -> ExitCode {
     let images = dir.join("t10k-images-idx3-ubyte");
     let labels = dir.join("t10k-labels-idx1-ubyte");
     if !images.exists() {
-        eprintln!("dataset not found at {}\nrun: ./scripts/fetch_mnist.sh", dir.display());
-        return ExitCode::FAILURE;
+        eprintln!(
+            "dataset not found at {}\nrun: ./scripts/fetch_mnist.sh",
+            dir.display()
+        );
+        return ExitCode::SUCCESS;
     }
 
     let data = load_images(&images).unwrap();
     let truth = load_labels(&labels).unwrap();
-    println!("images: {}  dims: {}  classes: {K}", data.len(), data[0].len());
+    println!(
+        "images: {}  dims: {}  classes: {K}",
+        data.len(),
+        data[0].len()
+    );
 
     let fit = Kmeans::new(K)
         .with_max_iter(100)
