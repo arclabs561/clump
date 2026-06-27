@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782431438053,
+  "lastUpdate": 1782583729057,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -3311,6 +3311,144 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 141415,
             "range": "± 4185",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "committer": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "distinct": true,
+          "id": "4899372d3d390fb4554be9287c3c532981b746e9",
+          "message": "clump: add rosetta correctness fixtures vs scikit-learn\n\nWave 4 of the Rosetta cross-language correctness program, completing the planned\ncrate priority. First crate in the QUALITY tolerance class (clustering output is\na partition, not a value).\n\nDBSCAN is deterministic given (eps, min_samples), so clump's labels must match\nsklearn's exactly up to a label permutation (ARI = 1.0). The test does not\ncompare label values; it asserts the two labelings induce the same partition:\nidentical noise set, and the co-cluster relation agrees on every pair. Three\nwell-separated blobs plus isolated noise make the result independent of boundary\nconventions (self-counting in min_samples, < vs <= on eps).\n\nk-means uses different k-means++ RNG in clump (f32) vs sklearn (f64), so the\ncentroids are not identical; inertia (WCSS) is compared within 2%, not exactly.\nOn separable blobs both reach the same optimum, so the gap is small.\n\nserde/serde_json are dev-dependencies only.",
+          "timestamp": "2026-06-27T13:50:55-04:00",
+          "tree_id": "a5e7c873cb16917a2ff30199bdafcdd4ce333bd6",
+          "url": "https://github.com/arclabs561/clump/commit/4899372d3d390fb4554be9287c3c532981b746e9"
+        },
+        "date": 1782583728740,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 596204,
+            "range": "± 10297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 3431799,
+            "range": "± 74318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 53620780,
+            "range": "± 161597",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 5530210,
+            "range": "± 23792",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 35438983,
+            "range": "± 113507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 289589110,
+            "range": "± 2970053",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 539051958,
+            "range": "± 2357771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 27948481,
+            "range": "± 174766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 4559660065,
+            "range": "± 28561001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 5601011,
+            "range": "± 8701",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 22491755,
+            "range": "± 216191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 570635802,
+            "range": "± 5280852",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 546949710,
+            "range": "± 5701823",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1285785342,
+            "range": "± 8152604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2642109,
+            "range": "± 19626",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 10349572,
+            "range": "± 47804",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 40865747,
+            "range": "± 490673",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 246641880,
+            "range": "± 1703430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 145369,
+            "range": "± 304",
             "unit": "ns/iter"
           }
         ]
