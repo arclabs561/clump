@@ -44,6 +44,9 @@ linfa-clustering = "0.8.1"
 ndarray = "0.16"
 ndarray-rand = "0.15"
 rand_xoshiro = "0.6"
+# Rosetta cross-language correctness fixtures (tests/rosetta_*.rs).
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [[bench]]
 name = "clustering"
