@@ -137,7 +137,7 @@ cargo run --example quickstart
 
 ## Benchmarks
 
-`benches/comparison.rs` has head-to-head scaffolding against linfa-clustering for k-means and DBSCAN. Comparative numbers across all algorithms are a TODO — the algorithms are implemented and tested, but aggregate results haven't been run and recorded yet.
+`benches/comparison.rs` has head-to-head scaffolding against linfa-clustering for k-means and DBSCAN. Comparative numbers across all algorithms are a TODO; the algorithms are implemented and tested, but aggregate results haven't been run and recorded yet.
 
 ## License
 
