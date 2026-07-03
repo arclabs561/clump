@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-07-03
+
 ### Fixed
 
 - HDBSCAN excess-of-mass selection over-split stable clusters: the selection
