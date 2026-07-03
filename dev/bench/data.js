@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782782808736,
+  "lastUpdate": 1783094159283,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -3587,6 +3587,144 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 143585,
             "range": "± 650",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "committer": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "distinct": true,
+          "id": "9f3f1a824fa2d95ea0566c7e68f04de4a82798c8",
+          "message": "hdbscan: select clusters in post-order, not reverse id order\n\nReverse-id selection assumed cluster ids are topological, but a genuine\nsplit allocates the parent id BEFORE fresh child ids, so a leaf born at\nan early merge can sit below a later ancestor. Such leaves were visited\nafter their ancestor had selected itself and deselected the subtree,\nand the unconditional leaf-select re-selected them: on a three-blob\ncontrol the reference implementation returns 3 clusters, clump returned\n6 (two blobs split into their sub-structure). Explicit post-order fixes\nboth that re-selection and the latent sibling hazard (a parent reading a\nlower-id internal child's unpropagated subtree stability).\n\nFound by pairing a discovery agent's structural claim with an empirical\noracle: a fixture generated from the McInnes hdbscan package\n(separated-blobs control + 3-level nested-density case). The agent's\nsecond claim, a core-distance off-by-one, was REFUTED by the same\noracle: shifting the convention one neighbor nearer worsened agreement\n(ARI 0.74 -> 0.46), and with the traversal fixed the shipped convention\nmatches the reference exactly (ARI 1.0 on both cases). The new rosetta\ntest asserts partition equality (noise set + pairwise co-cluster\nrelation) per the existing rosetta_clump.rs pattern and runs in the\ndefault gate.",
+          "timestamp": "2026-07-03T11:37:48-04:00",
+          "tree_id": "d44fbf1b42073f91d075ddae746417fa0221924f",
+          "url": "https://github.com/arclabs561/clump/commit/9f3f1a824fa2d95ea0566c7e68f04de4a82798c8"
+        },
+        "date": 1783094158756,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 598311,
+            "range": "± 12098",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 3438213,
+            "range": "± 57785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 53581736,
+            "range": "± 616943",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 5558579,
+            "range": "± 19271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 36905722,
+            "range": "± 125082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 289457425,
+            "range": "± 359381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 539048470,
+            "range": "± 3870583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 28143353,
+            "range": "± 34302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 4542554941,
+            "range": "± 20564210",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 5582653,
+            "range": "± 26104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 22194802,
+            "range": "± 179794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 568468341,
+            "range": "± 5987651",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 531215827,
+            "range": "± 4015560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1276350432,
+            "range": "± 4550581",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2670587,
+            "range": "± 12939",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 10351619,
+            "range": "± 84028",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 40406745,
+            "range": "± 748395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 245385779,
+            "range": "± 2812896",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 144308,
+            "range": "± 248",
             "unit": "ns/iter"
           }
         ]
