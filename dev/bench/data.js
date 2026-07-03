@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783094159283,
+  "lastUpdate": 1783107149200,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -3725,6 +3725,144 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 144308,
             "range": "± 248",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "committer": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "distinct": true,
+          "id": "94a6738bef146d75089965d0fff8b8a80744978b",
+          "message": "metrics: ground silhouette, calinski-harabasz, davies-bouldin, ari in sklearn\n\nThe four clustering metrics had no external oracle, and ARI serves as\nthe comparator inside the DBSCAN rosetta test without itself being\nverified. Fixtures generated from scikit-learn 1.9 over three labeled\ndatasets pin all twelve metric-dataset cells: ARI bit-exact (including\na fractional 0.6753907... case), the other three within f32 rounding\n(1e-7 relative and better against a 1e-4 TIGHT tolerance). clump's\nCH/DB take centroids as arguments, so the fixture stores sklearn's\ninternal cluster means and the test exercises the formula, not centroid\ncomputation; all fixture clusters are size >= 3 to stay clear of the\nknown singleton-silhouette convention gap (clump drops singletons from\nthe mean, sklearn scores them 0).",
+          "timestamp": "2026-07-03T15:15:38-04:00",
+          "tree_id": "1da8f7b815278d8942ca5e8106a94a914e6400f2",
+          "url": "https://github.com/arclabs561/clump/commit/94a6738bef146d75089965d0fff8b8a80744978b"
+        },
+        "date": 1783107148345,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 638006,
+            "range": "± 5083",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 3312834,
+            "range": "± 21330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 52083229,
+            "range": "± 268409",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 5368827,
+            "range": "± 112517",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 34881886,
+            "range": "± 415560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 281150637,
+            "range": "± 1169705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 523677609,
+            "range": "± 1533813",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 26989091,
+            "range": "± 103451",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 4353977595,
+            "range": "± 20789000",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 5251269,
+            "range": "± 33176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 21035089,
+            "range": "± 127809",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 544575181,
+            "range": "± 2597448",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 528596706,
+            "range": "± 2964875",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1227812658,
+            "range": "± 4709789",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2520664,
+            "range": "± 9826",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 9680000,
+            "range": "± 112197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 38051393,
+            "range": "± 223138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 233636536,
+            "range": "± 548652",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 141009,
+            "range": "± 1043",
             "unit": "ns/iter"
           }
         ]
