@@ -540,9 +540,38 @@ fn extract_clusters(
     let mut selected = vec![false; num_clusters];
     let mut subtree_stab = stability.clone();
 
-    // Process bottom-up. Since cluster ids increase as we process edges (parents
-    // always have higher ids than children), reverse order is bottom-up.
-    for i in (0..num_clusters).rev() {
+    // Process bottom-up in explicit post-order (children strictly before
+    // parents). Id order is NOT topological: a merge allocates the parent id
+    // before any fresh child ids, so a leaf born at an early merge can carry
+    // a lower id than an ancestor selected later. Under reverse-id order such
+    // a leaf was visited AFTER its ancestor had selected itself and
+    // deselected the subtree, and the unconditional leaf-select re-selected
+    // it — over-splitting stable clusters (three separated blobs came back
+    // as six against the reference implementation). Post-order also
+    // guarantees subtree_stab[child] is fully propagated before any parent
+    // reads it.
+    let mut is_child = vec![false; num_clusters];
+    for kids in &children {
+        for &c in kids {
+            is_child[c] = true;
+        }
+    }
+    let mut order = Vec::with_capacity(num_clusters);
+    let mut stack: Vec<(usize, bool)> = (0..num_clusters)
+        .filter(|&i| !is_child[i])
+        .map(|i| (i, false))
+        .collect();
+    while let Some((node, expanded)) = stack.pop() {
+        if expanded {
+            order.push(node);
+            continue;
+        }
+        stack.push((node, true));
+        for &c in &children[node] {
+            stack.push((c, false));
+        }
+    }
+    for i in order {
         if !has_cluster_child[i] {
             // Leaf cluster: select it.
             selected[i] = true;
