@@ -2,11 +2,11 @@
 
 [![crates.io](https://img.shields.io/crates/v/clump.svg)](https://crates.io/crates/clump)
 [![Documentation](https://docs.rs/clump/badge.svg)](https://docs.rs/clump)
-[![CI](https://github.com/arclabs561/clump/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/clump/actions/workflows/ci.yml)
 
-Clustering algorithms: K-means and mini-batch K-means,
-DBSCAN / HDBSCAN / OPTICS, EVoC for hierarchical, DenStream for
-streaming, and COP-Kmeans for constrained variants.
+Clustering algorithms.
+
+`clump` includes centroid, density, streaming, constrained, hierarchical, and
+graph-based clustering over vector or edge-list inputs.
 
 ```rust
 use clump::Dbscan;
