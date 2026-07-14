@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783969317193,
+  "lastUpdate": 1783996700933,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -4691,6 +4691,144 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 141907,
             "range": "± 847",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "committer": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "distinct": true,
+          "id": "f84e1799993724b714b5c088a354855e376933c0",
+          "message": "clump-python: upgrade PyO3 bindings to 0.29\n\nPyO3 0.29 contains upstream security and soundness fixes and raises the Rust floor to 1.83. The rebuilt extension passes all 31 Python binding tests.",
+          "timestamp": "2026-07-13T21:55:11-04:00",
+          "tree_id": "84fd3b4d90fab0c8e3f65693cb240b819b05402b",
+          "url": "https://github.com/arclabs561/clump/commit/f84e1799993724b714b5c088a354855e376933c0"
+        },
+        "date": 1783996700038,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 477877,
+            "range": "± 6693",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 2684609,
+            "range": "± 15490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 42955323,
+            "range": "± 128952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 4337687,
+            "range": "± 7949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 27715472,
+            "range": "± 143613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 232358147,
+            "range": "± 2810486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 432227485,
+            "range": "± 3449835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 22161740,
+            "range": "± 749722",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 3655567157,
+            "range": "± 29625889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 4430456,
+            "range": "± 9798",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 17848927,
+            "range": "± 55668",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 453994680,
+            "range": "± 5702608",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 421664840,
+            "range": "± 3368533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1022551662,
+            "range": "± 4714841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2171651,
+            "range": "± 8810",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 8543820,
+            "range": "± 17345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 33729410,
+            "range": "± 169820",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 204752648,
+            "range": "± 3645766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 113333,
+            "range": "± 4228",
             "unit": "ns/iter"
           }
         ]
