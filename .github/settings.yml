@@ -16,6 +16,15 @@ repository:
 
   topics:
     - clustering
+    - constrained-clustering
+    - correlation-clustering
+    - dbscan
+    - density-clustering
+    - gpu
+    - hdbscan
     - kmeans
     - machine-learning
+    - optics
     - rust
+    - simd
+    - streaming
