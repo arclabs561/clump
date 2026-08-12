@@ -3,8 +3,6 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use ndarray::Array2;
-use ndarray_rand::rand_distr::Uniform;
-use ndarray_rand::RandomExt;
 use rand::prelude::*;
 use std::hint::black_box;
 
@@ -12,19 +10,38 @@ use std::hint::black_box;
 // Shared synthetic data generators
 // ---------------------------------------------------------------------------
 
-/// Generate data as Vec<Vec<f32>> for clump (which takes `&[Vec<f32>]`).
-fn synth_vecs(n: usize, d: usize, seed: u64) -> Vec<Vec<f32>> {
-    let mut rng = StdRng::seed_from_u64(seed);
-    (0..n)
-        .map(|_| (0..d).map(|_| rng.random::<f32>()).collect())
-        .collect()
+struct SharedData {
+    vecs: Vec<Vec<f32>>,
+    array: Array2<f32>,
 }
 
-/// Generate data as ndarray Array2<f64> for linfa.
-fn synth_array2(n: usize, d: usize, seed: u64) -> Array2<f64> {
-    use ndarray_rand::rand::SeedableRng;
-    let rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(seed);
-    Array2::random_using((n, d), Uniform::new(0.0, 1.0), &mut rng.clone())
+/// Generate one f32 dataset, then expose it in each library's input shape.
+fn synth_data(n: usize, d: usize, seed: u64) -> SharedData {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let vecs: Vec<Vec<f32>> = (0..n)
+        .map(|_| (0..d).map(|_| rng.random::<f32>()).collect())
+        .collect();
+    let array = Array2::from_shape_fn((n, d), |(row, col)| vecs[row][col]);
+
+    SharedData { vecs, array }
+}
+
+/// Choose identical initial centroids for both implementations.
+fn initial_centroids(data: &SharedData, k: usize) -> (Vec<Vec<f32>>, Array2<f32>) {
+    let vecs = data.vecs.iter().take(k).cloned().collect::<Vec<_>>();
+    let d = data.array.ncols();
+    let array = Array2::from_shape_fn((k, d), |(row, col)| vecs[row][col]);
+    (vecs, array)
+}
+
+fn assert_identical_inputs(data: &SharedData) {
+    assert_eq!(data.vecs.len(), data.array.nrows());
+    assert!(data
+        .vecs
+        .iter()
+        .flatten()
+        .copied()
+        .eq(data.array.iter().copied()));
 }
 
 // ---------------------------------------------------------------------------
@@ -40,16 +57,47 @@ fn bench_kmeans_comparison(c: &mut Criterion) {
     let seed = 42u64;
     let max_iter = 10;
 
-    let clump_data = synth_vecs(n, d, seed);
-    let linfa_data = synth_array2(n, d, seed);
+    let data = synth_data(n, d, seed);
+    let (clump_centroids, linfa_centroids) = initial_centroids(&data, k);
+    assert_identical_inputs(&data);
+
+    // Keep the timing comparison tied to a quality oracle. Both fits start
+    // from the same centroids; their final mean squared distances should agree.
+    {
+        use linfa::prelude::*;
+        use linfa::DatasetBase;
+        use linfa_clustering::{KMeans, KMeansInit};
+
+        let clump_fit = clump::Kmeans::new(k)
+            .with_max_iter(max_iter)
+            .with_centroids(clump_centroids.clone())
+            .fit(&data.vecs)
+            .unwrap();
+        let linfa_fit = KMeans::params(k)
+            .max_n_iterations(max_iter as u64)
+            .n_runs(1)
+            .tolerance(1e-4)
+            .init_method(KMeansInit::Precomputed(linfa_centroids.clone()))
+            .fit(&DatasetBase::from(data.array.clone()))
+            .unwrap();
+        let clump_inertia = clump_fit.inertia_trace.last().unwrap() / n as f32;
+        // The implementations use different convergence/update details, so
+        // require comparable rather than bit-identical ten-iteration output.
+        let allowed_delta = linfa_fit.inertia().abs().max(1e-5) * 0.05;
+        assert!(
+            (clump_inertia - linfa_fit.inertia()).abs() <= allowed_delta,
+            "k-means mean inertia differs: clump={clump_inertia}, linfa={}",
+            linfa_fit.inertia()
+        );
+    }
 
     // -- clump --
     group.bench_function("clump/n1000_d16_k10", |b| {
         b.iter(|| {
             clump::Kmeans::new(k)
                 .with_max_iter(max_iter)
-                .with_seed(seed)
-                .fit_predict(black_box(&clump_data))
+                .with_centroids(clump_centroids.clone())
+                .fit(black_box(&data.vecs))
                 .unwrap()
         })
     });
@@ -58,15 +106,16 @@ fn bench_kmeans_comparison(c: &mut Criterion) {
     group.bench_function("linfa/n1000_d16_k10", |b| {
         use linfa::prelude::*;
         use linfa::DatasetBase;
-        use linfa_clustering::KMeans;
+        use linfa_clustering::{KMeans, KMeansInit};
 
+        let dataset = DatasetBase::from(data.array.view());
         b.iter(|| {
-            let dataset = DatasetBase::from(black_box(linfa_data.clone()));
             KMeans::params(k)
                 .max_n_iterations(max_iter as u64)
                 .n_runs(1)
                 .tolerance(1e-4)
-                .fit(&dataset)
+                .init_method(KMeansInit::Precomputed(linfa_centroids.clone()))
+                .fit(black_box(&dataset))
                 .unwrap()
         })
     });
@@ -86,14 +135,14 @@ fn bench_dbscan_comparison(c: &mut Criterion) {
     let seed = 42u64;
     let min_pts = 5;
 
-    let clump_data = synth_vecs(n, d, seed);
-    let linfa_data = synth_array2(n, d, seed);
+    let data = synth_data(n, d, seed);
+    assert_identical_inputs(&data);
 
     // -- clump --
     group.bench_function("clump/n1000_d16", |b| {
         b.iter(|| {
             clump::Dbscan::new(0.5_f32, min_pts)
-                .fit_predict(black_box(&clump_data))
+                .fit_predict(black_box(&data.vecs))
                 .unwrap()
         })
     });
@@ -104,9 +153,9 @@ fn bench_dbscan_comparison(c: &mut Criterion) {
         use linfa_clustering::Dbscan;
 
         b.iter(|| {
-            Dbscan::params::<f64>(min_pts)
-                .tolerance(0.5_f64)
-                .transform(black_box(&linfa_data))
+            Dbscan::params::<f32>(min_pts)
+                .tolerance(0.5_f32)
+                .transform(black_box(&data.array))
         })
     });
 
