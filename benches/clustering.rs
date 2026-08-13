@@ -333,37 +333,6 @@ fn bench_evoc(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_parallel_kmeans(c: &mut Criterion) {
-    let mut group = c.benchmark_group("parallel_kmeans");
-
-    // Fixed dataset: n=50k, k=64, dim=32. Run sequential path unconditionally;
-    // parallel path only when the `parallel` feature is active.
-    let data = synth_data(50000, 32, 42);
-
-    group.bench_function("n50000_d32_k64_sequential", |b| {
-        b.iter(|| {
-            Kmeans::new(64)
-                .with_max_iter(5)
-                .with_seed(42)
-                .fit_predict(black_box(&data))
-                .unwrap()
-        })
-    });
-
-    #[cfg(feature = "parallel")]
-    group.bench_function("n50000_d32_k64_parallel", |b| {
-        b.iter(|| {
-            Kmeans::new(64)
-                .with_max_iter(5)
-                .with_seed(42)
-                .fit_predict(black_box(&data))
-                .unwrap()
-        })
-    });
-
-    group.finish();
-}
-
 fn bench_correlation(c: &mut Criterion) {
     let mut group = c.benchmark_group("correlation");
 
@@ -402,6 +371,5 @@ criterion_group!(
     bench_evoc,
     bench_correlation,
     bench_metrics,
-    bench_parallel_kmeans,
 );
 criterion_main!(benches);

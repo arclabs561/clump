@@ -98,7 +98,14 @@ impl DistanceMetric for CosineDistance {
         debug_assert_eq!(a.len(), b.len());
         #[cfg(feature = "simd")]
         if a.len() >= 16 {
-            return 1.0 - innr::cosine(a, b);
+            let dot = innr::dot(a, b);
+            let norm_a = innr::dot(a, a);
+            let norm_b = innr::dot(b, b);
+            let denom = (norm_a * norm_b).sqrt();
+            if denom < 1e-9 {
+                return 0.0;
+            }
+            return 1.0 - dot / denom;
         }
         {
             let mut dot = 0.0f32;
@@ -206,6 +213,33 @@ impl<A: DistanceMetric, B: DistanceMetric> DistanceMetric for CompositeDistance<
 mod tests {
     use super::*;
 
+    #[cfg(feature = "simd")]
+    fn assert_close(actual: f32, expected: f32) {
+        let tolerance = 1e-5 * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "actual={actual}, expected={expected}, tolerance={tolerance}"
+        );
+    }
+
+    #[cfg(feature = "simd")]
+    fn scalar_cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum();
+        let denominator = (norm_a * norm_b).sqrt();
+        if denominator < 1e-9 {
+            0.0
+        } else {
+            1.0 - dot / denominator
+        }
+    }
+
+    #[cfg(feature = "simd")]
+    fn scalar_inner_product_distance(a: &[f32], b: &[f32]) -> f32 {
+        -a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>()
+    }
+
     #[test]
     fn squared_euclidean_basic() {
         let a = [1.0, 0.0];
@@ -239,6 +273,39 @@ mod tests {
         let b = [3.0, 4.0];
         // dot = 3 + 8 = 11, distance = -11
         assert!((InnerProductDistance.distance(&a, &b) - (-11.0)).abs() < 1e-6);
+    }
+
+    #[cfg(feature = "simd")]
+    #[test]
+    fn simd_metrics_match_scalar_references_across_dispatch_boundary() {
+        for len in [15, 16, 17, 31, 32, 65] {
+            let a: Vec<f32> = (0..len).map(|i| ((i as f32 + 0.25) * 0.37).sin()).collect();
+            let b: Vec<f32> = (0..len)
+                .map(|i| ((i as f32 + 0.75) * -0.23).cos())
+                .collect();
+
+            assert_close(
+                CosineDistance.distance(&a, &b),
+                scalar_cosine_distance(&a, &b),
+            );
+            assert_close(
+                InnerProductDistance.distance(&a, &b),
+                scalar_inner_product_distance(&a, &b),
+            );
+        }
+    }
+
+    #[cfg(feature = "simd")]
+    #[test]
+    fn simd_cosine_zero_vector_matches_scalar_reference() {
+        for len in [16, 17, 32] {
+            let zeros = vec![0.0; len];
+            let values: Vec<f32> = (0..len).map(|i| i as f32 - 4.0).collect();
+            assert_close(
+                CosineDistance.distance(&zeros, &values),
+                scalar_cosine_distance(&zeros, &values),
+            );
+        }
     }
 
     #[test]

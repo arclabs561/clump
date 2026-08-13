@@ -95,7 +95,7 @@ pub fn am_soft_assign(data: &[Vec<f64>], centroids: &[Vec<f64>], beta: f64) -> V
 /// Contract a point toward centroids using AM energy descent.
 ///
 /// Uses the Log-Sum-Exp (LSE) energy from [`hopfield`]: gradient descent on
-/// `E_β(v; Ξ) = -log Σ_μ exp(-β/2 ||v - ξ^μ||²)` converges toward the
+/// `E_β(v; Ξ) = -(1/β) log Σ_μ exp(-β/2 ||v - ξ^μ||²)` converges toward the
 /// nearest centroid attractor.
 ///
 /// # Arguments
