@@ -24,7 +24,7 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 | DBSCAN | Density | Yes | Labels noise (`NOISE` sentinel) | `&impl DataRef` |
 | HDBSCAN | Density (hierarchical) | Yes | Labels noise | `&impl DataRef` |
 | DenStream | Density (streaming) | Yes | Decays outliers | `&impl DataRef` |
-| EVoC | Hierarchical | Yes | Near-duplicate detection | `&impl DataRef` |
+| EVoC | Hierarchical | Yes | Small components labeled noise | `&impl DataRef` |
 | COP-Kmeans | Constrained centroid | No (k required) | None | `&impl DataRef` + constraints |
 | OPTICS | Density (reachability) | Yes | Reachability plot | `&impl DataRef` |
 | Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
@@ -59,7 +59,8 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 
 ## Zero-copy flat input
 
-All algorithms accept `&impl DataRef`. Pass `Vec<Vec<f32>>` or use `FlatRef` for zero-copy flat buffers:
+Vector-input algorithms accept `&impl DataRef`. Pass `Vec<Vec<f32>>` or use
+`FlatRef` for zero-copy flat buffers:
 
 ```rust
 use clump::{FlatRef, Kmeans};
@@ -120,7 +121,9 @@ Built-in metrics are `SquaredEuclidean`, `Euclidean`, `CosineDistance`,
 
 ## Features
 
-Optional features: `parallel` (Rayon), `gpu` (Metal k-means, macOS), `serde`, `ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance).
+Optional features: `parallel` (Rayon), `gpu` (Metal k-means on macOS), `serde`,
+`ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance), `blas`
+(matrixmultiply), and `hopfield` (associative-memory helpers).
 
 ## Examples
 
@@ -141,7 +144,9 @@ cargo run --example quickstart
 
 ## Benchmarks
 
-`benches/comparison.rs` has head-to-head scaffolding against linfa-clustering for k-means and DBSCAN. Comparative numbers across all algorithms are a TODO; the algorithms are implemented and tested, but aggregate results haven't been run and recorded yet.
+`benches/comparison.rs` measures clump and linfa-clustering on identical
+synthetic inputs for k-means and DBSCAN. No comparative results are published
+here.
 
 ## License
 
