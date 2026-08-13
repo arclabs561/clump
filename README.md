@@ -17,16 +17,16 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 
 ## Algorithms
 
-| Algorithm | Kind | Discovers k | Noise handling | Input |
-|-----------|------|-------------|----------------|-------|
-| K-means | Centroid | No (k required) | None | `&impl DataRef` |
-| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `&impl DataRef` |
-| DBSCAN | Density | Yes | Labels noise (`NOISE` sentinel) | `&impl DataRef` |
-| HDBSCAN | Density (hierarchical) | Yes | Labels noise | `&impl DataRef` |
-| DenStream | Density (streaming) | Yes | Decays outliers | `&impl DataRef` |
-| EVoC | Hierarchical | Yes | Small components labeled noise | `&impl DataRef` |
-| COP-Kmeans | Constrained centroid | No (k required) | None | `&impl DataRef` + constraints |
-| OPTICS | Density (reachability) | Yes | Reachability plot | `&impl DataRef` |
+| Algorithm | Kind | Discovers k | Noise handling | Batch input |
+|-----------|------|-------------|----------------|-------------|
+| K-means | Centroid | No (k required) | None | `DataRef` |
+| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `DataRef` |
+| DBSCAN | Density | Yes | `NOISE` sentinel | `DataRef` |
+| HDBSCAN | Density (hierarchical) | Yes | `NOISE` sentinel | `DataRef` |
+| DenStream | Density (streaming) | Yes | Decaying outlier micro-clusters | `DataRef` |
+| EVoC | Hierarchical | Yes | `None` outside retained components | `DataRef` |
+| COP-Kmeans | Constrained centroid | No (k required) | None | `DataRef` + constraints |
+| OPTICS | Density (reachability) | Yes | `NOISE` when extracting clusters | `DataRef` |
 | Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
 
 ## Quickstart
@@ -59,8 +59,8 @@ let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
 
 ## Zero-copy flat input
 
-Vector-input algorithms accept `&impl DataRef`. Pass `Vec<Vec<f32>>` or use
-`FlatRef` for zero-copy flat buffers:
+The vector APIs in the table accept `DataRef` batches. Pass `Vec<Vec<f32>>` or
+use `FlatRef` for a zero-copy view over a flat buffer:
 
 ```rust
 use clump::{FlatRef, Kmeans};

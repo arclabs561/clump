@@ -58,21 +58,21 @@ src/cluster/
 | `gpu` | metal | Metal compute shader for k-means assignment (n*k >= 500k) |
 | `serde` | serde | Serialize/Deserialize on KmeansFit, SignedEdge, etc. |
 | `ndarray` | ndarray | array2_to_vecs, flat_to_vecs conversion helpers |
-| `blas` | matrixmultiply | SGEMM for first-iter k-means assignment (1.85x at k=100) |
+| `blas` | matrixmultiply | SGEMM for the first k-means assignment pass |
 
 ## Precision
 
 - Centroid accumulation uses f64, cast back to f32 (sklearn pattern). Prevents precision loss at n > 50k.
-- innr SIMD dispatch threshold: d >= 32 for L2, d >= 16 for cosine/dot. Below threshold, LLVM auto-vectorization is faster.
+- innr SIMD dispatch threshold: d >= 32 for L2, d >= 16 for cosine/dot. Treat
+  these as implementation cutoffs and remeasure them on target hardware before
+  changing them.
 
-## Rejected approaches (benchmarked and documented)
+## Rejected approaches
 
-- **k-means||** (Bahmani et al. 2012): 2.3x slower than k-means++ at k=100. Oversampling creates too many candidates.
-- **Manual tiled GEMM**: 50% slower than Hamerly per-point loops. Without real BLAS micro-kernels, manual tiling loses to LLVM auto-vectorization.
-- **chunks_exact(4) in distance**: 12% regression at d=16. Creates serial dependency chain that prevents LLVM auto-vectorization.
-- **#[inline(always)] on distance**: instruction cache pressure in larger functions, 15-30% regression on DBSCAN/HDBSCAN.
-- **Parallel centroid update**: rayon overhead > benefit for O(n*d) additions.
-- **Fused assign+update loop**: hurts small n (data fits in cache, second pass is free).
+Prior local benchmarks rejected k-means|| initialization, manually tiled GEMM,
+manual four-element distance chunks, forced distance inlining, parallel centroid
+updates, and a fused assignment/update loop. Re-run the relevant Criterion group
+before relying on those results for a different toolchain or machine.
 
 ## Testing
 
@@ -89,7 +89,7 @@ src/cluster/
 
 Run `cargo bench` for the full suite. Key configs:
 - `n100000_d16_k100`: large-scale k-means
-- `n200000_d128_k50`: massive high-dim (use `--features simd,parallel`)
+- `n200000_d128_k50`: high-dimensional k-means (use `--features simd,parallel`)
 - `--bench comparison`: clump and linfa-clustering on identical synthetic inputs
 
 When optimizing: benchmark before and after. Run the Criterion suites locally

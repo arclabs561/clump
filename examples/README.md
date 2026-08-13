@@ -97,9 +97,13 @@ Data: 121 points (3 clusters of 40 + 1 outlier)
   5        60.2       0.8446       28256.4         0.2213
   6        40.5       0.7231       33377.8         0.3408
 
+Best k: highest silhouette, highest Calinski-Harabasz, lowest Davies-Bouldin.
+WCSS decreases monotonically; the elbow is where the rate of decrease slows.
+
 --- DBSCAN + DISCO ---
 DBSCAN (eps=3.0, min_pts=3): 3 clusters, 1 noise points
 DISCO score: 0.9665
+DISCO evaluates both cluster quality and noise assignment correctness.
 ```
 
 ## Streaming
