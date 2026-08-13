@@ -393,6 +393,7 @@ proptest! {
     #[test]
     fn denstream_active_cluster_survives(n in 5usize..30) {
         let mut ds = DenStream::new(2.0, 2)
+            .with_initial_buffer_size(0)
             .with_beta(0.5)
             .with_lambda(0.01)
             .with_mu(3.0)

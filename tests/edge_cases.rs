@@ -793,6 +793,7 @@ fn denstream_base2_decay_rate() {
     // t_p=5 means the first prune fires on the fifth update.
     let t_p = 5usize;
     let mut ds = DenStream::new(0.5, 2) // tight epsilon: far-away points won't merge
+        .with_initial_buffer_size(0)
         .with_beta(0.5)
         .with_lambda(1.0)
         .with_mu(3.0)

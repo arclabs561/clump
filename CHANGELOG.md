@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- DenStream now buffers 1,000 raw points for its initialization phase and uses
+  the weighted, radius-aware offline phase described by Cao et al. Set
+  `with_initial_buffer_size(0)` for immediate online processing. The former
+  centroid-DBSCAN helper remains available as `macro_cluster_unweighted`.
+- `DenStream::new` now uses Euclidean distance so `epsilon`, micro-cluster
+  radius, offline reachability, and prediction share units. Explicit legacy
+  squared-distance behavior is available through
+  `new_squared_euclidean_legacy`.
+
 ## [0.5.8] - 2026-07-03
 
 ### Fixed
@@ -27,4 +38,3 @@
 ### Fixed
 
 - GPU module gated to macOS targets so `--all-features` builds cleanly on Linux.
-

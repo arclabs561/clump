@@ -10,10 +10,11 @@
 //!   (low weight). Outlier micro-clusters that accumulate enough weight are
 //!   promoted to potential. Periodic pruning removes stale micro-clusters.
 //!
-//! - **Macro-clustering helper** (on demand): runs DBSCAN on the centroids of
-//!   potential micro-clusters. This is not the paper's weighted offline phase,
-//!   and the online phase starts immediately rather than using the paper's
-//!   initialization buffer.
+//! - **Initialization**: buffers the first 1,000 points without decay, then
+//!   applies DBSCAN with `epsilon` and `beta * mu` as the density threshold.
+//! - **Offline phase** (on demand): connects dense potential micro-clusters
+//!   whose centers and radii overlap. Border micro-clusters join a neighboring
+//!   core but do not expand it.
 //!
 //! ## Micro-Cluster Summary
 //!
@@ -27,13 +28,15 @@
 //! ## Parameters
 //!
 //! - `epsilon`: radius threshold for micro-cluster absorption
-//! - `macro_epsilon`: epsilon for the offline DBSCAN pass
-//! - `min_pts`: minimum points for DBSCAN core classification
+//! - `macro_epsilon`: maximum center distance in the weighted offline phase
+//! - `min_pts`: minimum points used only by the legacy unweighted helper
 //! - `beta`: weight factor -- an outlier is promoted when `weight > beta * mu`
 //! - `lambda`: decay factor (higher = faster forgetting)
 //! - `mu`: base weight for new points
 //! - `t_p`: pruning period, derived from `beta`, `mu`, and `lambda` unless
 //!   explicitly overridden
+//! - initialization buffer size: 1,000 points by default; zero starts online
+//!   processing immediately
 //!
 //! ## Trade-offs
 //!
@@ -48,7 +51,7 @@
 //! over an Evolving Data Stream with Noise." SDM 2006.
 
 use super::dbscan::{Dbscan, NOISE};
-use super::distance::{DistanceMetric, SquaredEuclidean};
+use super::distance::{DistanceMetric, Euclidean, SquaredEuclidean};
 use super::flat::DataRef;
 use crate::error::{Error, Result};
 
@@ -70,6 +73,24 @@ struct MicroCluster {
     creation_time: u64,
     /// Timestamp of the most recent absorbed point.
     last_update: u64,
+}
+
+impl MicroCluster {
+    fn from_points(points: &[Vec<f32>], timestamp: u64) -> Self {
+        let mut cluster = Self::new(&points[0], timestamp);
+        for point in &points[1..] {
+            cluster.n += 1;
+            cluster.weight += 1.0;
+            for (&value, (ls, ss)) in point
+                .iter()
+                .zip(cluster.ls.iter_mut().zip(cluster.ss.iter_mut()))
+            {
+                *ls += value;
+                *ss += value * value;
+            }
+        }
+        cluster
+    }
 }
 
 impl MicroCluster {
@@ -104,10 +125,12 @@ impl MicroCluster {
 
     /// Compute the radius that would result from absorbing an additional point,
     /// without actually modifying the micro-cluster.
-    fn radius_if_absorbed(&self, point: &[f32]) -> f32 {
-        let new_w = self.weight as f32 + 1.0;
-        let new_ls: Vec<f32> = self.ls.iter().zip(point).map(|(&l, &p)| l + p).collect();
-        let new_ss: Vec<f32> = self
+    fn radius_if_absorbed(&self, point: &[f32], decay_factor: f64, timestamp: u64) -> f32 {
+        let mut decayed = self.clone();
+        decayed.apply_decay(decay_factor, timestamp);
+        let new_w = decayed.weight as f32 + 1.0;
+        let new_ls: Vec<f32> = decayed.ls.iter().zip(point).map(|(&l, &p)| l + p).collect();
+        let new_ss: Vec<f32> = decayed
             .ss
             .iter()
             .zip(point)
@@ -170,13 +193,14 @@ impl MicroCluster {
 
 /// DenStream: streaming density-based clustering.
 ///
-/// Maintains online micro-clusters that summarize the stream, then runs DBSCAN
-/// on their centroids to produce macro-clusters on demand.
+/// Maintains online micro-clusters that summarize the stream, then applies the
+/// weighted DenStream offline phase on demand.
 ///
 /// ```
 /// use clump::DenStream;
 ///
 /// let mut ds = DenStream::new(1.0, 3)
+///     .with_initial_buffer_size(0)
 ///     .with_lambda(0.01)
 ///     .with_mu(2.0);
 ///
@@ -193,12 +217,12 @@ impl MicroCluster {
 /// assert!(ds.n_clusters() >= 2);
 /// ```
 #[derive(Debug, Clone)]
-pub struct DenStream<D: DistanceMetric = SquaredEuclidean> {
+pub struct DenStream<D: DistanceMetric = Euclidean> {
     /// Micro-cluster radius threshold.
     epsilon: f32,
     /// DBSCAN epsilon for macro-clustering.
     macro_epsilon: f32,
-    /// Minimum points for DBSCAN core in macro-clustering.
+    /// Minimum points for the legacy unweighted macro-clustering helper.
     min_pts: usize,
     /// Weight threshold factor. An outlier is promoted when its weight exceeds `beta * mu`.
     beta: f64,
@@ -220,16 +244,32 @@ pub struct DenStream<D: DistanceMetric = SquaredEuclidean> {
     updates_since_prune: usize,
     /// Dimensionality of the first point seen (for validation).
     dim: Option<usize>,
+    /// Number of raw points used for the paper's initialization phase.
+    initial_buffer_size: usize,
+    /// Undecayed points waiting for initialization.
+    initial_buffer: Vec<Vec<f32>>,
+    /// Whether the initialization phase has completed.
+    initialized: bool,
 }
 
-impl DenStream<SquaredEuclidean> {
-    /// Create a new DenStream with the default squared Euclidean distance.
+impl DenStream<Euclidean> {
+    /// Create a new DenStream with the default Euclidean distance.
     ///
     /// # Arguments
     ///
     /// * `epsilon` - Maximum radius for micro-cluster absorption.
-    /// * `min_pts` - Minimum points for DBSCAN core in macro-clustering.
+    /// * `min_pts` - Minimum points for [`Self::macro_cluster_unweighted`].
     pub fn new(epsilon: f32, min_pts: usize) -> Self {
+        Self::with_metric(epsilon, min_pts, Euclidean)
+    }
+}
+
+impl DenStream<SquaredEuclidean> {
+    /// Create a DenStream with the pre-0.6 squared-Euclidean online metric.
+    ///
+    /// This is retained for source migrations. Its online `predict` threshold
+    /// is expressed in squared-distance units; new code should use [`DenStream::new`].
+    pub fn new_squared_euclidean_legacy(epsilon: f32, min_pts: usize) -> Self {
         Self::with_metric(epsilon, min_pts, SquaredEuclidean)
     }
 }
@@ -251,6 +291,9 @@ impl<D: DistanceMetric> DenStream<D> {
             timestamp: 0,
             updates_since_prune: 0,
             dim: None,
+            initial_buffer_size: 1000,
+            initial_buffer: Vec::new(),
+            initialized: false,
         }
     }
 
@@ -292,6 +335,22 @@ impl<D: DistanceMetric> DenStream<D> {
     pub fn with_pruning_period(mut self, t_p: usize) -> Self {
         self.pruning_period_override = Some(t_p);
         self
+    }
+
+    /// Set the number of points used by the initialization phase.
+    ///
+    /// The default is 1,000. Setting this to zero starts the online phase
+    /// immediately, which is useful for low-latency streams and preserves the
+    /// pre-0.6 behavior.
+    pub fn with_initial_buffer_size(mut self, size: usize) -> Self {
+        self.initial_buffer_size = size;
+        self.initialized = size == 0;
+        self
+    }
+
+    /// Return whether the initialization phase has completed.
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
     }
 
     /// Validate the coupled DenStream parameters.
@@ -350,23 +409,100 @@ impl<D: DistanceMetric> DenStream<D> {
         })
     }
 
-    /// Run DBSCAN on potential micro-cluster centroids to produce macro-clusters.
+    /// Apply DenStream's weighted offline phase to potential micro-clusters.
     ///
     /// Returns one label per potential micro-cluster. Labels are cluster indices
-    /// or `NOISE` (`usize::MAX`) for micro-clusters that DBSCAN considers noise.
+    /// or `NOISE` (`usize::MAX`). A core micro-cluster has its own weight at
+    /// least `mu`. Two micro-clusters are neighbors only when their Euclidean
+    /// center distance is at most `macro_epsilon` and their radii overlap.
+    /// The configured generic metric is used by the online nearest-cluster
+    /// search only; this paper-defined phase is Euclidean.
     pub fn macro_cluster(&self) -> Result<Vec<usize>> {
         self.validate_parameters()?;
         if self.p_micro_clusters.is_empty() {
             return Err(Error::EmptyInput);
         }
 
+        let mut clusters = self.p_micro_clusters.clone();
+        for cluster in &mut clusters {
+            cluster.decay(self.lambda, self.timestamp);
+        }
+        let centroids: Vec<Vec<f32>> = clusters.iter().map(MicroCluster::centroid).collect();
+        let radii: Vec<f32> = clusters.iter().map(MicroCluster::radius).collect();
+        let core: Vec<bool> = clusters.iter().map(|mc| mc.weight >= self.mu).collect();
+        let euclidean = Euclidean;
+        let neighbors = |a: usize, b: usize| {
+            let distance = euclidean.distance(&centroids[a], &centroids[b]);
+            distance <= self.macro_epsilon && distance <= radii[a] + radii[b]
+        };
+
+        let mut labels = vec![NOISE; centroids.len()];
+        let mut next_label = 0;
+        for seed in 0..centroids.len() {
+            if !core[seed] || labels[seed] != NOISE {
+                continue;
+            }
+            labels[seed] = next_label;
+            let mut queue = vec![seed];
+            let mut cursor = 0;
+            while cursor < queue.len() {
+                let current = queue[cursor];
+                cursor += 1;
+                for candidate in 0..centroids.len() {
+                    if labels[candidate] == NOISE && neighbors(current, candidate) {
+                        labels[candidate] = next_label;
+                        if core[candidate] {
+                            queue.push(candidate);
+                        }
+                    }
+                }
+            }
+            next_label += 1;
+        }
+        Ok(labels)
+    }
+
+    /// Run the pre-0.6 unweighted centroid DBSCAN helper.
+    pub fn macro_cluster_unweighted(&self) -> Result<Vec<usize>> {
+        self.validate_parameters()?;
+        if self.p_micro_clusters.is_empty() {
+            return Err(Error::EmptyInput);
+        }
         let centroids: Vec<Vec<f32>> = self
             .p_micro_clusters
             .iter()
-            .map(|mc| mc.centroid())
+            .map(MicroCluster::centroid)
             .collect();
-        let dbscan = Dbscan::with_metric(self.macro_epsilon, self.min_pts, self.metric.clone());
-        dbscan.fit_predict(&centroids)
+        Dbscan::with_metric(self.macro_epsilon, self.min_pts, self.metric.clone())
+            .fit_predict(&centroids)
+    }
+
+    fn initialize_from_buffer(&mut self) -> Result<()> {
+        let min_weight = (self.beta * self.mu).ceil() as usize;
+        let labels = Dbscan::new(self.epsilon, min_weight).fit_predict(&self.initial_buffer)?;
+        let n_clusters = labels
+            .iter()
+            .copied()
+            .filter(|&label| label != NOISE)
+            .max()
+            .map_or(0, |label| label + 1);
+        for label in 0..n_clusters {
+            let points: Vec<Vec<f32>> = self
+                .initial_buffer
+                .iter()
+                .zip(&labels)
+                .filter(|(_, &point_label)| point_label == label)
+                .map(|(point, _)| point.clone())
+                .collect();
+            if points.len() as f64 >= self.beta * self.mu {
+                self.p_micro_clusters
+                    .push(MicroCluster::from_points(&points, self.timestamp));
+            }
+        }
+        self.initial_buffer.clear();
+        self.initialized = true;
+        self.updates_since_prune = 0;
+        Ok(())
     }
 
     /// Validate a point's dimensionality against previously seen points.
@@ -466,6 +602,8 @@ fn outlier_weight_threshold(lambda: f64, t_p: u64, age: u64) -> f64 {
 impl<D: DistanceMetric> DenStream<D> {
     /// Absorb a single point, returning the index of the nearest potential
     /// micro-cluster, or `NOISE` if the point was placed in an outlier cluster.
+    /// Updates made during initialization also return `NOISE`; inspect
+    /// [`Self::is_initialized`] before consuming online assignments.
     pub fn update(&mut self, point: &[f32]) -> Result<usize> {
         self.validate_parameters()?;
         self.validate_point(point)?;
@@ -488,6 +626,14 @@ impl<D: DistanceMetric> DenStream<D> {
         self.timestamp += 1;
         let ts = self.timestamp;
 
+        if !self.initialized {
+            self.initial_buffer.push(point.to_vec());
+            if self.initial_buffer.len() >= self.initial_buffer_size {
+                self.initialize_from_buffer()?;
+            }
+            return Ok(NOISE);
+        }
+
         let potential_threshold = self.beta * self.mu;
         let mut assigned_p_idx = None;
 
@@ -495,7 +641,7 @@ impl<D: DistanceMetric> DenStream<D> {
         if let Some((idx, _)) = self.nearest_micro_cluster(point, &self.p_micro_clusters) {
             // The paper's merge condition is the projected micro-cluster
             // radius, not the point-to-center distance.
-            let new_radius = self.p_micro_clusters[idx].radius_if_absorbed(point);
+            let new_radius = self.p_micro_clusters[idx].radius_if_absorbed(point, self.lambda, ts);
             if new_radius <= self.epsilon {
                 self.p_micro_clusters[idx].absorb(point, self.lambda, ts);
 
@@ -507,7 +653,8 @@ impl<D: DistanceMetric> DenStream<D> {
         if assigned_p_idx.is_none() {
             let mut absorbed_into_outlier = false;
             if let Some((idx, _)) = self.nearest_micro_cluster(point, &self.o_micro_clusters) {
-                let new_radius = self.o_micro_clusters[idx].radius_if_absorbed(point);
+                let new_radius =
+                    self.o_micro_clusters[idx].radius_if_absorbed(point, self.lambda, ts);
                 if new_radius <= self.epsilon {
                     self.o_micro_clusters[idx].absorb(point, self.lambda, ts);
                     absorbed_into_outlier = true;
@@ -612,8 +759,9 @@ mod tests {
     use crate::cluster::dbscan::NOISE;
 
     /// Helper: create a DenStream configured for testing with tight clusters.
-    fn test_denstream() -> DenStream<SquaredEuclidean> {
+    fn test_denstream() -> DenStream<Euclidean> {
         DenStream::new(2.0, 2)
+            .with_initial_buffer_size(0)
             .with_beta(0.5)
             .with_lambda(0.001)
             .with_mu(3.0)
@@ -666,6 +814,7 @@ mod tests {
     fn pruning_removes_stale_clusters() {
         // Use aggressive decay and short pruning period.
         let mut ds = DenStream::new(2.0, 2)
+            .with_initial_buffer_size(0)
             .with_beta(0.5)
             .with_lambda(1.0) // very aggressive decay
             .with_mu(3.0)
@@ -697,6 +846,7 @@ mod tests {
     #[test]
     fn macro_clustering_finds_groups() {
         let mut ds = DenStream::new(1.0, 1)
+            .with_initial_buffer_size(0)
             .with_beta(0.2)
             .with_lambda(0.0001)
             .with_mu(6.0)
@@ -733,6 +883,7 @@ mod tests {
         use crate::cluster::distance::Euclidean;
 
         let mut ds = DenStream::with_metric(2.0, 2, Euclidean)
+            .with_initial_buffer_size(0)
             .with_beta(0.5)
             .with_lambda(0.001)
             .with_mu(3.0);
@@ -842,6 +993,7 @@ mod tests {
     #[test]
     fn centroid_drift_under_decay() {
         let mut ds = DenStream::new(2.0, 2)
+            .with_initial_buffer_size(0)
             .with_beta(0.2)
             .with_lambda(0.1) // moderate decay
             .with_mu(6.0)
@@ -922,6 +1074,7 @@ mod tests {
     #[test]
     fn singleton_is_outlier_and_promotion_is_strict() {
         let mut ds = DenStream::new(1.0, 1)
+            .with_initial_buffer_size(0)
             .with_beta(0.75)
             .with_mu(2.0)
             .with_lambda(1.0)
@@ -943,6 +1096,7 @@ mod tests {
     #[test]
     fn merge_uses_projected_radius_not_center_distance() {
         let mut ds = DenStream::new(1.0, 1)
+            .with_initial_buffer_size(0)
             .with_beta(0.75)
             .with_mu(2.0)
             .with_lambda(0.000_001)
@@ -953,6 +1107,25 @@ mod tests {
         // two-point radius is 0.75 <= epsilon.
         ds.update(&[1.5]).unwrap();
         assert_eq!(ds.o_micro_clusters.len() + ds.p_micro_clusters.len(), 1);
+    }
+
+    #[test]
+    fn projected_radius_applies_decay_before_testing_merge() {
+        let cluster = MicroCluster::from_points(&[vec![-1.0], vec![1.0]], 0);
+        assert!(cluster.radius_if_absorbed(&[0.0], 0.0, 10) > 0.8);
+        assert!(cluster.radius_if_absorbed(&[0.0], 10.0, 10) < 0.01);
+    }
+
+    #[test]
+    fn default_predict_uses_euclidean_epsilon_units() {
+        let mut ds = DenStream::new(2.0, 1)
+            .with_initial_buffer_size(0)
+            .with_beta(0.5)
+            .with_mu(3.0)
+            .with_lambda(0.001);
+        ds.p_micro_clusters.push(summary(0.0, 0.0, 3));
+        ds.dim = Some(1);
+        assert_eq!(ds.predict(&[1.5]).unwrap(), 0);
     }
 
     #[test]
@@ -968,6 +1141,146 @@ mod tests {
         for mut ds in cases {
             assert!(ds.update(&[0.0]).is_err());
         }
+    }
+
+    #[test]
+    fn initialization_uses_raw_closed_epsilon_neighborhoods() {
+        let mut ds = DenStream::new(2.0, 1)
+            .with_initial_buffer_size(2)
+            .with_beta(0.5)
+            .with_mu(4.0)
+            .with_lambda(10.0);
+
+        assert!(!ds.is_initialized());
+        ds.update(&[0.0]).unwrap();
+        assert!(!ds.is_initialized());
+        ds.update(&[2.0]).unwrap();
+
+        assert!(ds.is_initialized());
+        assert_eq!(ds.n_clusters(), 1);
+        assert_eq!(ds.counts(), vec![2]);
+        assert!((ds.centroids()[0][0] - 1.0).abs() < 1e-6);
+        assert!((ds.p_micro_clusters[0].radius() - 1.0).abs() < 1e-6);
+        assert!((ds.p_micro_clusters[0].weight - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn initialization_discards_noise_and_respects_beta_mu_threshold() {
+        let mut ds = DenStream::new(0.25, 1)
+            .with_initial_buffer_size(4)
+            .with_beta(0.75)
+            .with_mu(4.0)
+            .with_lambda(0.1);
+        for point in [[0.0], [0.1], [0.2], [10.0]] {
+            ds.update(&point).unwrap();
+        }
+        assert_eq!(ds.n_clusters(), 1);
+        assert_eq!(ds.counts(), vec![3]);
+        assert!(ds.o_micro_clusters.is_empty());
+    }
+
+    #[test]
+    fn zero_buffer_selects_immediate_lifecycle() {
+        let mut ds = DenStream::new(1.0, 1)
+            .with_initial_buffer_size(0)
+            .with_beta(0.75)
+            .with_mu(2.0)
+            .with_lambda(0.1);
+        assert!(ds.is_initialized());
+        ds.update(&[0.0]).unwrap();
+        assert_eq!(ds.o_micro_clusters.len(), 1);
+    }
+
+    fn summary(center: f32, radius: f32, weight: usize) -> MicroCluster {
+        let spread = radius;
+        let points: Vec<Vec<f32>> = if weight == 1 {
+            vec![vec![center]]
+        } else {
+            (0..weight)
+                .map(|index| {
+                    if index % 2 == 0 {
+                        vec![center - spread]
+                    } else {
+                        vec![center + spread]
+                    }
+                })
+                .collect()
+        };
+        MicroCluster::from_points(&points, 0)
+    }
+
+    fn offline_model(clusters: Vec<MicroCluster>) -> DenStream<Euclidean> {
+        let mut ds = DenStream::new(1.0, 1)
+            .with_initial_buffer_size(0)
+            .with_beta(0.5)
+            .with_mu(3.0)
+            .with_lambda(0.1)
+            .with_macro_epsilon(2.0);
+        ds.p_micro_clusters = clusters;
+        ds
+    }
+
+    #[test]
+    fn offline_density_is_each_micro_clusters_own_weight() {
+        let ds = offline_model(vec![
+            summary(0.0, 1.0, 2),
+            summary(0.5, 1.0, 2),
+            summary(1.0, 1.0, 2),
+        ]);
+        assert_eq!(ds.macro_cluster().unwrap(), vec![NOISE; 3]);
+    }
+
+    #[test]
+    fn offline_core_weight_is_decayed_to_current_timestamp() {
+        let mut ds = offline_model(vec![summary(0.0, 1.0, 4)]);
+        ds.lambda = 1.0;
+        ds.timestamp = 2;
+        assert_eq!(ds.macro_cluster().unwrap(), vec![NOISE]);
+    }
+
+    #[test]
+    fn offline_requires_radius_overlap() {
+        let ds = offline_model(vec![summary(0.0, 0.0, 3), summary(0.5, 0.0, 3)]);
+        assert_eq!(ds.macro_cluster().unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn offline_border_micro_cluster_does_not_expand_chain() {
+        let ds = offline_model(vec![
+            summary(0.0, 1.0, 4),
+            summary(1.5, 1.0, 2),
+            summary(3.0, 1.0, 4),
+        ]);
+        assert_eq!(ds.macro_cluster().unwrap(), vec![0, 0, 1]);
+    }
+
+    #[test]
+    fn offline_partition_is_permutation_invariant() {
+        let first = offline_model(vec![
+            summary(0.0, 1.0, 4),
+            summary(1.0, 1.0, 4),
+            summary(10.0, 1.0, 4),
+        ]);
+        let second = offline_model(vec![
+            summary(10.0, 1.0, 4),
+            summary(1.0, 1.0, 4),
+            summary(0.0, 1.0, 4),
+        ]);
+        let a = first.macro_cluster().unwrap();
+        let b = second.macro_cluster().unwrap();
+        assert_eq!(a[0] == a[1], b[1] == b[2]);
+        assert_eq!(a[0] == a[2], b[2] == b[0]);
+    }
+
+    #[test]
+    fn unweighted_helper_matches_centroid_dbscan() {
+        let mut ds = offline_model(vec![
+            summary(0.0, 0.2, 4),
+            summary(1.0, 0.2, 4),
+            summary(10.0, 0.2, 4),
+        ]);
+        ds.min_pts = 2;
+        assert_eq!(ds.macro_cluster_unweighted().unwrap(), vec![0, 0, NOISE]);
     }
 }
 
@@ -989,6 +1302,7 @@ mod proptests {
         #[test]
         fn labels_in_valid_range(points in arb_points(30, 3)) {
             let mut ds = DenStream::new(5.0, 2)
+                .with_initial_buffer_size(0)
                 .with_beta(0.5)
                 .with_lambda(0.001)
                 .with_mu(3.0)
@@ -1009,6 +1323,7 @@ mod proptests {
         #[test]
         fn centroid_dimension_matches_input(points in arb_points(10, 5)) {
             let mut ds = DenStream::new(5.0, 2)
+                .with_initial_buffer_size(0)
                 .with_beta(0.5)
                 .with_lambda(0.001)
                 .with_mu(3.0);
@@ -1028,6 +1343,7 @@ mod proptests {
     #[test]
     fn centroid_drift_under_decay() {
         let mut ds = DenStream::new(2.0, 2)
+            .with_initial_buffer_size(0)
             .with_beta(0.5)
             .with_lambda(0.1)
             .with_mu(3.0);
