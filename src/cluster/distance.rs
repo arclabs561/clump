@@ -297,6 +297,22 @@ mod tests {
 
     #[cfg(feature = "simd")]
     #[test]
+    fn simd_dot_consumers_exactly_match_innr() {
+        for len in [16, 17, 31, 32, 65] {
+            let a: Vec<f32> = (0..len).map(|i| ((i as f32 + 0.25) * 0.37).sin()).collect();
+            let b: Vec<f32> = (0..len)
+                .map(|i| ((i as f32 + 0.75) * -0.23).cos())
+                .collect();
+            let dot = innr::dot(&a, &b);
+            let denominator = (innr::dot(&a, &a) * innr::dot(&b, &b)).sqrt();
+
+            assert_eq!(InnerProductDistance.distance(&a, &b), -dot);
+            assert_eq!(CosineDistance.distance(&a, &b), 1.0 - dot / denominator);
+        }
+    }
+
+    #[cfg(feature = "simd")]
+    #[test]
     fn simd_cosine_zero_vector_matches_scalar_reference() {
         for len in [16, 17, 32] {
             let zeros = vec![0.0; len];
