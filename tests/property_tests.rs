@@ -395,7 +395,7 @@ proptest! {
         let mut ds = DenStream::new(2.0, 2)
             .with_beta(0.5)
             .with_lambda(0.01)
-            .with_mu(1.0)
+            .with_mu(3.0)
             .with_pruning_period(100);
         for _ in 0..n {
             ds.update(&[0.0, 0.0]).unwrap();

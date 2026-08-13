@@ -786,36 +786,30 @@ fn metrics_with_one_cluster_returns_zero() {
 fn denstream_base2_decay_rate() {
     // Verify that decay drives cluster pruning.
     //
-    // With lambda=1.0 and beta=0.5, mu=1.0, the prune threshold is beta*mu=0.5.
-    // A freshly created cluster starts at weight=1.0. After 2 time steps its
-    // weight is 2^(-1.0*2) = 0.25 < 0.5, so it must be pruned on the next
-    // prune pass.
+    // With lambda=1.0 and beta=0.5, mu=3.0, the potential threshold is 1.5.
+    // Three origin updates promote the cluster. Two inactive steps decay its
+    // weight from 1.75 to 0.4375, so the next prune removes it.
     //
-    // Strategy: seed one origin cluster, then feed t_p far-away points (each
-    // becomes its own isolated outlier or p-cluster far from origin) so that
-    // a prune fires. After pruning, the origin cluster should be gone because
-    // its weight decayed below the threshold.
-    //
-    // t_p=5 means prune fires after every 5 updates.
+    // t_p=5 means the first prune fires on the fifth update.
     let t_p = 5usize;
     let mut ds = DenStream::new(0.5, 2) // tight epsilon: far-away points won't merge
         .with_beta(0.5)
         .with_lambda(1.0)
-        .with_mu(1.0)
+        .with_mu(3.0)
         .with_pruning_period(t_p);
 
-    // Seed origin cluster.
-    ds.update(&[0.0, 0.0]).unwrap();
+    // Promote an origin cluster before letting it go stale.
+    for _ in 0..3 {
+        ds.update(&[0.0, 0.0]).unwrap();
+    }
+    assert_eq!(ds.n_clusters(), 1);
 
-    // Feed t_p far-away points to trigger a prune pass. Each is placed at a
-    // distinct large coordinate so none merges into the origin cluster.
-    for i in 1..=(t_p as i32) {
+    // Two far-away updates advance the stream to the pruning boundary.
+    for i in 1..=2 {
         ds.update(&[1000.0 * i as f32, 0.0]).unwrap();
     }
 
-    // After t_p+1 updates (1 seed + t_p far points), a prune has fired.
-    // The origin cluster has aged t_p steps: weight = 2^(-1.0*t_p) ≈ 0.031 < 0.5.
-    // It must have been pruned.
+    // The promoted origin cluster must have been pruned.
     let centroids = ds.centroids();
     let has_origin = centroids
         .iter()

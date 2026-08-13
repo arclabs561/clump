@@ -10,9 +10,10 @@
 //!   (low weight). Outlier micro-clusters that accumulate enough weight are
 //!   promoted to potential. Periodic pruning removes stale micro-clusters.
 //!
-//! - **Offline phase** (on demand): runs DBSCAN on the centroids of potential
-//!   micro-clusters to produce macro-clusters. Each data point inherits the
-//!   label of its nearest potential micro-cluster.
+//! - **Macro-clustering helper** (on demand): runs DBSCAN on the centroids of
+//!   potential micro-clusters. This is not the paper's weighted offline phase,
+//!   and the online phase starts immediately rather than using the paper's
+//!   initialization buffer.
 //!
 //! ## Micro-Cluster Summary
 //!
@@ -28,10 +29,11 @@
 //! - `epsilon`: radius threshold for micro-cluster absorption
 //! - `macro_epsilon`: epsilon for the offline DBSCAN pass
 //! - `min_pts`: minimum points for DBSCAN core classification
-//! - `beta`: weight factor -- a micro-cluster needs `weight >= beta * mu` to be potential
+//! - `beta`: weight factor -- an outlier is promoted when `weight > beta * mu`
 //! - `lambda`: decay factor (higher = faster forgetting)
 //! - `mu`: base weight for new points
-//! - `t_p`: pruning period (prune every `t_p` updates)
+//! - `t_p`: pruning period, derived from `beta`, `mu`, and `lambda` unless
+//!   explicitly overridden
 //!
 //! ## Trade-offs
 //!
@@ -175,9 +177,8 @@ impl MicroCluster {
 /// use clump::DenStream;
 ///
 /// let mut ds = DenStream::new(1.0, 3)
-///     .with_beta(0.5)
 ///     .with_lambda(0.01)
-///     .with_mu(1.0);
+///     .with_mu(2.0);
 ///
 /// // Feed points from two clusters.
 /// for i in 0..20 {
@@ -199,14 +200,14 @@ pub struct DenStream<D: DistanceMetric = SquaredEuclidean> {
     macro_epsilon: f32,
     /// Minimum points for DBSCAN core in macro-clustering.
     min_pts: usize,
-    /// Weight threshold factor. A micro-cluster needs weight >= beta * mu to be "potential".
+    /// Weight threshold factor. An outlier is promoted when its weight exceeds `beta * mu`.
     beta: f64,
     /// Decay factor lambda. Higher = faster forgetting of old data.
     lambda: f64,
     /// Base weight for new points.
     mu: f64,
-    /// Pruning period (prune every t_p updates).
-    t_p: usize,
+    /// Explicit pruning-period override. `None` uses the paper's derived period.
+    pruning_period_override: Option<usize>,
     /// Distance metric.
     metric: D,
     /// Potential micro-clusters (high weight, form the basis of macro-clusters).
@@ -240,10 +241,10 @@ impl<D: DistanceMetric> DenStream<D> {
             epsilon,
             macro_epsilon: epsilon * 2.0,
             min_pts,
-            beta: 0.5,
-            lambda: 0.001,
-            mu: 1.0,
-            t_p: 100,
+            beta: 0.75,
+            lambda: 0.25,
+            mu: 2.0,
+            pruning_period_override: None,
             metric,
             p_micro_clusters: Vec::new(),
             o_micro_clusters: Vec::new(),
@@ -255,7 +256,7 @@ impl<D: DistanceMetric> DenStream<D> {
 
     /// Set the weight threshold factor beta.
     ///
-    /// A micro-cluster needs `weight >= beta * mu` to be classified as potential.
+    /// An outlier is promoted when its weight exceeds `beta * mu`.
     pub fn with_beta(mut self, beta: f64) -> Self {
         self.beta = beta;
         self
@@ -283,12 +284,70 @@ impl<D: DistanceMetric> DenStream<D> {
         self
     }
 
-    /// Set the pruning period.
+    /// Override the pruning period.
     ///
-    /// Stale micro-clusters are pruned every `t_p` updates.
+    /// By default, the period is derived from `beta`, `mu`, and `lambda` using
+    /// the equation from Cao et al. This override is retained for applications
+    /// that need an externally controlled update cadence.
     pub fn with_pruning_period(mut self, t_p: usize) -> Self {
-        self.t_p = t_p;
+        self.pruning_period_override = Some(t_p);
         self
+    }
+
+    /// Validate the coupled DenStream parameters.
+    fn validate_parameters(&self) -> Result<()> {
+        if !self.epsilon.is_finite() || self.epsilon <= 0.0 {
+            return Err(Error::InvalidParameter {
+                name: "epsilon",
+                message: "must be finite and greater than zero",
+            });
+        }
+        if !self.macro_epsilon.is_finite() || self.macro_epsilon <= 0.0 {
+            return Err(Error::InvalidParameter {
+                name: "macro_epsilon",
+                message: "must be finite and greater than zero",
+            });
+        }
+        if self.min_pts == 0 {
+            return Err(Error::InvalidParameter {
+                name: "min_pts",
+                message: "must be greater than zero",
+            });
+        }
+        if !self.beta.is_finite() || !(0.0..=1.0).contains(&self.beta) || self.beta == 0.0 {
+            return Err(Error::InvalidParameter {
+                name: "beta",
+                message: "must be finite and in (0, 1]",
+            });
+        }
+        if !self.mu.is_finite() || self.mu <= 0.0 || self.beta * self.mu <= 1.0 {
+            return Err(Error::InvalidParameter {
+                name: "mu",
+                message: "must be finite, positive, and satisfy beta * mu > 1",
+            });
+        }
+        if !self.lambda.is_finite() || self.lambda <= 0.0 {
+            return Err(Error::InvalidParameter {
+                name: "lambda",
+                message: "must be finite and greater than zero",
+            });
+        }
+        if self.pruning_period_override == Some(0) {
+            return Err(Error::InvalidParameter {
+                name: "t_p",
+                message: "must be greater than zero",
+            });
+        }
+        Ok(())
+    }
+
+    /// Effective pruning period from Eq. 4 of Cao et al., rounded up to an
+    /// integral stream timestamp.
+    fn pruning_period(&self) -> usize {
+        self.pruning_period_override.unwrap_or_else(|| {
+            let threshold = self.beta * self.mu;
+            ((threshold / (threshold - 1.0)).log2() / self.lambda).ceil() as usize
+        })
     }
 
     /// Run DBSCAN on potential micro-cluster centroids to produce macro-clusters.
@@ -296,6 +355,7 @@ impl<D: DistanceMetric> DenStream<D> {
     /// Returns one label per potential micro-cluster. Labels are cluster indices
     /// or `NOISE` (`usize::MAX`) for micro-clusters that DBSCAN considers noise.
     pub fn macro_cluster(&self) -> Result<Vec<usize>> {
+        self.validate_parameters()?;
         if self.p_micro_clusters.is_empty() {
             return Err(Error::EmptyInput);
         }
@@ -383,11 +443,11 @@ impl<D: DistanceMetric> DenStream<D> {
         // From the paper: xi(t_c, t) = (2^(-lambda*(t - t_c + t_p)) - 1) / (2^(-lambda * t_p) - 1)
         // Outliers that haven't accumulated enough weight relative to their age are removed.
         let current_ts = self.timestamp;
-        let t_p = self.t_p as u64;
+        let t_p = self.pruning_period() as u64;
         let lam = self.lambda;
         self.o_micro_clusters.retain(|mc| {
             let age = current_ts.saturating_sub(mc.creation_time);
-            mc.weight >= outlier_weight_threshold(lam, t_p, age, threshold)
+            mc.weight >= outlier_weight_threshold(lam, t_p, age)
         });
     }
 }
@@ -395,22 +455,19 @@ impl<D: DistanceMetric> DenStream<D> {
 /// Compute the weight threshold for an outlier micro-cluster given its age.
 ///
 /// From the paper: xi(t_c, t) = (2^{-lambda*(t - t_c + t_p)} - 1) / (2^{-lambda*t_p} - 1).
-/// An outlier whose weight falls below `xi * beta * mu` is pruned.
-fn outlier_weight_threshold(lambda: f64, t_p: u64, age: u64, potential_threshold: f64) -> f64 {
-    let denom = 2.0_f64.powf(-lambda * t_p as f64) - 1.0;
-    if denom.abs() < f64::EPSILON {
-        // lambda * t_p is near zero: xi approaches 1. Use potential threshold.
-        return potential_threshold;
-    }
-    let numer = 2.0_f64.powf(-lambda * (age + t_p) as f64) - 1.0;
-    let xi = numer / denom;
-    xi * potential_threshold
+/// An outlier whose weight falls below this raw `xi` value is pruned.
+fn outlier_weight_threshold(lambda: f64, t_p: u64, age: u64) -> f64 {
+    // exp_m1 retains the ratio's precision when lambda is very small.
+    let denom = (-lambda * t_p as f64 * std::f64::consts::LN_2).exp_m1();
+    let numer = (-lambda * (age + t_p) as f64 * std::f64::consts::LN_2).exp_m1();
+    numer / denom
 }
 
 impl<D: DistanceMetric> DenStream<D> {
     /// Absorb a single point, returning the index of the nearest potential
     /// micro-cluster, or `NOISE` if the point was placed in an outlier cluster.
     pub fn update(&mut self, point: &[f32]) -> Result<usize> {
+        self.validate_parameters()?;
         self.validate_point(point)?;
 
         // Validate finite values.
@@ -435,57 +492,48 @@ impl<D: DistanceMetric> DenStream<D> {
         let mut assigned_p_idx = None;
 
         // Step 1: Try to absorb into nearest potential micro-cluster.
-        if let Some((idx, dist)) = self.nearest_micro_cluster(point, &self.p_micro_clusters) {
-            if dist <= self.epsilon {
-                // Check if absorbing would keep radius within epsilon.
-                let new_radius = self.p_micro_clusters[idx].radius_if_absorbed(point);
-                if new_radius <= self.epsilon {
-                    self.p_micro_clusters[idx].absorb(point, self.lambda, ts);
+        if let Some((idx, _)) = self.nearest_micro_cluster(point, &self.p_micro_clusters) {
+            // The paper's merge condition is the projected micro-cluster
+            // radius, not the point-to-center distance.
+            let new_radius = self.p_micro_clusters[idx].radius_if_absorbed(point);
+            if new_radius <= self.epsilon {
+                self.p_micro_clusters[idx].absorb(point, self.lambda, ts);
 
-                    assigned_p_idx = Some(idx);
-                }
+                assigned_p_idx = Some(idx);
             }
         }
 
         // Step 2: If not absorbed into a p-cluster, try outlier micro-clusters.
         if assigned_p_idx.is_none() {
             let mut absorbed_into_outlier = false;
-            if let Some((idx, dist)) = self.nearest_micro_cluster(point, &self.o_micro_clusters) {
-                if dist <= self.epsilon {
-                    let new_radius = self.o_micro_clusters[idx].radius_if_absorbed(point);
-                    if new_radius <= self.epsilon {
-                        self.o_micro_clusters[idx].absorb(point, self.lambda, ts);
-                        absorbed_into_outlier = true;
+            if let Some((idx, _)) = self.nearest_micro_cluster(point, &self.o_micro_clusters) {
+                let new_radius = self.o_micro_clusters[idx].radius_if_absorbed(point);
+                if new_radius <= self.epsilon {
+                    self.o_micro_clusters[idx].absorb(point, self.lambda, ts);
+                    absorbed_into_outlier = true;
 
-                        // Check if this outlier should be promoted to potential.
-                        if self.o_micro_clusters[idx].weight >= potential_threshold {
-                            let promoted = self.o_micro_clusters.remove(idx);
-                            self.p_micro_clusters.push(promoted);
+                    // Promotion is strict in the paper: w > beta * mu.
+                    if self.o_micro_clusters[idx].weight > potential_threshold {
+                        let promoted = self.o_micro_clusters.remove(idx);
+                        self.p_micro_clusters.push(promoted);
 
-                            // The promoted cluster is now the last p-cluster.
-                            assigned_p_idx = Some(self.p_micro_clusters.len() - 1);
-                        }
+                        // The promoted cluster is now the last p-cluster.
+                        assigned_p_idx = Some(self.p_micro_clusters.len() - 1);
                     }
                 }
             }
 
             // Step 3: If not absorbed anywhere, create new outlier micro-cluster.
             if !absorbed_into_outlier && assigned_p_idx.is_none() {
-                let mc = MicroCluster::new(point, ts);
-                // If a single-point cluster already meets the potential threshold, add as potential.
-                if mc.weight >= potential_threshold {
-                    self.p_micro_clusters.push(mc);
-
-                    assigned_p_idx = Some(self.p_micro_clusters.len() - 1);
-                } else {
-                    self.o_micro_clusters.push(mc);
-                }
+                // Online-start mode: without the paper's initialization buffer,
+                // every new singleton begins as an outlier micro-cluster.
+                self.o_micro_clusters.push(MicroCluster::new(point, ts));
             }
         }
 
         // Periodic pruning.
         self.updates_since_prune += 1;
-        if self.updates_since_prune >= self.t_p {
+        if self.updates_since_prune >= self.pruning_period() {
             self.prune();
             self.updates_since_prune = 0;
         }
@@ -568,7 +616,7 @@ mod tests {
         DenStream::new(2.0, 2)
             .with_beta(0.5)
             .with_lambda(0.001)
-            .with_mu(1.0)
+            .with_mu(3.0)
             .with_macro_epsilon(4.0)
             .with_pruning_period(1000)
     }
@@ -583,9 +631,8 @@ mod tests {
         // Second point within epsilon should join the same micro-cluster.
         ds.update(&[0.1, 0.1]).ok();
 
-        // With beta=0.5, mu=1.0, threshold=0.5. A single point has weight 1.0,
-        // so even a single-point cluster is potential when mu >= threshold.
-        // After two absorptions, we should still have a compact set.
+        // A singleton begins as an outlier. The second nearby point is absorbed
+        // into the same summary.
         assert!(
             ds.p_micro_clusters.len() + ds.o_micro_clusters.len() <= 2,
             "nearby points should merge"
@@ -621,7 +668,7 @@ mod tests {
         let mut ds = DenStream::new(2.0, 2)
             .with_beta(0.5)
             .with_lambda(1.0) // very aggressive decay
-            .with_mu(1.0)
+            .with_mu(3.0)
             .with_pruning_period(5);
 
         // Create a cluster far from subsequent activity.
@@ -649,10 +696,10 @@ mod tests {
 
     #[test]
     fn macro_clustering_finds_groups() {
-        let mut ds = DenStream::new(1.0, 2)
+        let mut ds = DenStream::new(1.0, 1)
             .with_beta(0.2)
             .with_lambda(0.0001)
-            .with_mu(1.0)
+            .with_mu(6.0)
             .with_macro_epsilon(3.0)
             .with_pruning_period(10_000);
 
@@ -688,7 +735,7 @@ mod tests {
         let mut ds = DenStream::with_metric(2.0, 2, Euclidean)
             .with_beta(0.5)
             .with_lambda(0.001)
-            .with_mu(1.0);
+            .with_mu(3.0);
 
         ds.update(&[0.0, 0.0]).ok();
         ds.update(&[0.5, 0.5]).ok();
@@ -797,7 +844,7 @@ mod tests {
         let mut ds = DenStream::new(2.0, 2)
             .with_beta(0.2)
             .with_lambda(0.1) // moderate decay
-            .with_mu(1.0)
+            .with_mu(6.0)
             .with_pruning_period(10_000);
 
         // Phase 1: 50 points at origin.
@@ -850,6 +897,78 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn defaults_derive_paper_pruning_period() {
+        let ds = DenStream::new(1.0, 2);
+        // ceil(log2(1.5 / 0.5) / 0.25) = ceil(log2(3) * 4) = 7.
+        assert_eq!(ds.pruning_period(), 7);
+    }
+
+    #[test]
+    fn outlier_threshold_matches_paper_equation() {
+        let lambda = 0.25;
+        let t_p = 7;
+        let age = 11;
+        let expected = (2.0_f64.powf(-lambda * 18.0) - 1.0) / (2.0_f64.powf(-lambda * 7.0) - 1.0);
+        assert!((outlier_weight_threshold(lambda, t_p, age) - expected).abs() < 1e-12);
+
+        // As lambda approaches zero, xi approaches (age + t_p) / t_p.
+        let tiny_lambda = 1e-20;
+        let expected_limit = (age + t_p) as f64 / t_p as f64;
+        assert!((outlier_weight_threshold(tiny_lambda, t_p, age) - expected_limit).abs() < 1e-12);
+    }
+
+    #[test]
+    fn singleton_is_outlier_and_promotion_is_strict() {
+        let mut ds = DenStream::new(1.0, 1)
+            .with_beta(0.75)
+            .with_mu(2.0)
+            .with_lambda(1.0)
+            .with_pruning_period(100);
+
+        assert_eq!(ds.update(&[0.0]).unwrap(), NOISE);
+        assert_eq!(ds.p_micro_clusters.len(), 0);
+        assert_eq!(ds.o_micro_clusters.len(), 1);
+
+        // After one step: 1 * 2^-1 + 1 = beta * mu = 1.5, so equality
+        // must not promote.
+        assert_eq!(ds.update(&[0.0]).unwrap(), NOISE);
+        assert_eq!(ds.p_micro_clusters.len(), 0);
+
+        assert_ne!(ds.update(&[0.0]).unwrap(), NOISE);
+        assert_eq!(ds.p_micro_clusters.len(), 1);
+    }
+
+    #[test]
+    fn merge_uses_projected_radius_not_center_distance() {
+        let mut ds = DenStream::new(1.0, 1)
+            .with_beta(0.75)
+            .with_mu(2.0)
+            .with_lambda(0.000_001)
+            .with_pruning_period(100);
+
+        ds.update(&[0.0]).unwrap();
+        // Squared center distance is 2.25 > epsilon, while the projected
+        // two-point radius is 0.75 <= epsilon.
+        ds.update(&[1.5]).unwrap();
+        assert_eq!(ds.o_micro_clusters.len() + ds.p_micro_clusters.len(), 1);
+    }
+
+    #[test]
+    fn invalid_coupled_parameters_are_rejected() {
+        let cases = [
+            DenStream::new(0.0, 1),
+            DenStream::new(1.0, 0),
+            DenStream::new(1.0, 1).with_beta(0.0),
+            DenStream::new(1.0, 1).with_beta(0.5).with_mu(2.0),
+            DenStream::new(1.0, 1).with_lambda(0.0),
+            DenStream::new(1.0, 1).with_pruning_period(0),
+        ];
+        for mut ds in cases {
+            assert!(ds.update(&[0.0]).is_err());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -872,7 +991,7 @@ mod proptests {
             let mut ds = DenStream::new(5.0, 2)
                 .with_beta(0.5)
                 .with_lambda(0.001)
-                .with_mu(1.0)
+                .with_mu(3.0)
                 .with_pruning_period(1000);
 
             for point in &points {
@@ -892,7 +1011,7 @@ mod proptests {
             let mut ds = DenStream::new(5.0, 2)
                 .with_beta(0.5)
                 .with_lambda(0.001)
-                .with_mu(1.0);
+                .with_mu(3.0);
 
             for point in &points {
                 ds.update(point).expect("update should succeed");
@@ -911,7 +1030,7 @@ mod proptests {
         let mut ds = DenStream::new(2.0, 2)
             .with_beta(0.5)
             .with_lambda(0.1)
-            .with_mu(1.0);
+            .with_mu(3.0);
 
         // Feed points near origin.
         for _ in 0..20 {

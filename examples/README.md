@@ -120,10 +120,10 @@ After batch 3 (30 pts): centroids at ["(0.66, 0.66)", "(35.60, 35.60)"]
 Predict: (0.5,0.5)->cluster 0, (50.5,50.5)->cluster 1
 
 --- DenStream ---
-After 30 pts near origin: 2 potential micro-clusters
-After 30 more pts near (50,50): 4 potential micro-clusters
+After 30 pts near origin: 1 potential micro-clusters
+After 30 more pts near (50,50): 2 potential micro-clusters
 Macro-clusters: 2, noise micro-clusters: 0
-Predict: (0.5,0.5)->mc 0, (50.5,50.5)->mc 2
+Predict: (0.5,0.5)->mc 0, (50.5,50.5)->mc 1
 ```
 
 ## Real data

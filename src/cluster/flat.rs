@@ -493,7 +493,7 @@ mod tests {
         let mut ds = DenStream::new(2.0, 2)
             .with_beta(0.5)
             .with_lambda(0.001)
-            .with_mu(1.0);
+            .with_mu(3.0);
         let labels = ds.update_batch(&data).unwrap();
         assert_eq!(labels.len(), 4);
         let pred = ds.predict_batch(&data).unwrap();

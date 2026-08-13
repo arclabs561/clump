@@ -55,10 +55,10 @@ fn main() {
 
     // --- DenStream ---
     println!("\n--- DenStream ---");
-    let mut ds = DenStream::new(2.0, 2)
+    let mut ds = DenStream::new(2.0, 1)
         .with_beta(0.5)
         .with_lambda(0.001)
-        .with_mu(1.0)
+        .with_mu(3.0)
         .with_macro_epsilon(10.0);
 
     // Feed cluster A: points near (0, 0).
