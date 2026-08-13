@@ -2,6 +2,7 @@
 
 #![allow(deprecated)]
 
+use clump::cluster::metrics::adjusted_rand_index;
 use clump::*;
 use proptest::prelude::*;
 
@@ -12,7 +13,47 @@ fn arb_data(max_n: usize, d: usize) -> impl Strategy<Value = Vec<Vec<f32>>> {
     )
 }
 
+#[derive(Clone)]
+struct ExactCustomSquared;
+
+impl DistanceMetric for ExactCustomSquared {
+    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        a.iter().zip(b).map(|(&x, &y)| (x - y) * (x - y)).sum()
+    }
+}
+
 proptest! {
+    #[test]
+    fn kmeans_translation_and_custom_metric_parity(
+        noise in proptest::collection::vec(-2i16..=2, 9..30),
+        offset in -10_000i32..10_000,
+    ) {
+        let centers = [-20.0f32, 0.0, 20.0];
+        let data: Vec<Vec<f32>> = noise
+            .iter()
+            .enumerate()
+            .map(|(i, &delta)| vec![centers[i % 3] + f32::from(delta)])
+            .collect();
+        let shifted: Vec<Vec<f32>> = data
+            .iter()
+            .map(|point| vec![point[0] + offset as f32])
+            .collect();
+        let initial: Vec<Vec<f32>> = centers.iter().map(|&center| vec![center]).collect();
+        let shifted_initial: Vec<Vec<f32>> = centers
+            .iter()
+            .map(|&center| vec![center + offset as f32])
+            .collect();
+        let builtin = Kmeans::new(3).with_centroids(initial.clone()).fit(&data).unwrap();
+        let translated = Kmeans::new(3).with_centroids(shifted_initial).fit(&shifted).unwrap();
+        let custom = Kmeans::with_metric(3, ExactCustomSquared)
+            .with_centroids(initial)
+            .fit(&data)
+            .unwrap();
+        prop_assert!((adjusted_rand_index(&translated.labels, &builtin.labels) - 1.0).abs() < 1e-12);
+        prop_assert!((adjusted_rand_index(&custom.labels, &builtin.labels) - 1.0).abs() < 1e-12);
+        prop_assert_eq!(custom.predict(&data).unwrap(), custom.labels);
+    }
+
     /// K-means: all labels must be in [0, k).
     #[test]
     fn prop_kmeans_all_assigned(
@@ -549,7 +590,7 @@ proptest! {
 // ============================================================================
 
 // After k-means converges, every point must be assigned to the centroid that
-// is actually closest under SquaredEuclidean. This catches Hamerly/geometric
+// is actually closest under SquaredEuclidean. This catches Hamerly
 // bound drift where the accelerated assignment diverges from brute-force.
 proptest! {
     #[test]
@@ -576,18 +617,18 @@ proptest! {
         }
     }
 
-    // Both the geometric path and the Hamerly path must satisfy the
+    // Both small-k and large-k Hamerly paths must satisfy the
     // nearest-centroid invariant.
     //
     // Dispatch in the non-parallel build (the default for tests):
-    //   k <= 64  -> geometric_assign (Gk-means three-stage filter)
-    //   k >  64  -> hamerly_assign
+    //   k < 16   -> nested centroid vectors
+    //   k >= 16  -> flat centroid buffer
     //
-    // k=5 exercises the geometric path; k=65 exercises the Hamerly path.
+    // k=5 exercises the nested path; k=65 exercises the flat-buffer path.
     // The `if k > data.len() { continue; }` guard skips cases where the data
     // is too small to form k clusters.
     #[test]
-    fn kmeans_geometric_vs_hamerly_nearest(
+    fn kmeans_small_and_large_k_nearest(
         data in proptest::collection::vec(
             proptest::collection::vec(-50.0f32..50.0, 4..=4),
             70..=100
@@ -609,7 +650,7 @@ proptest! {
                     }
                 }
                 prop_assert!(fit.labels[i] == best_k,
-                    "wrong assignment for geometric/hamerly path");
+                    "wrong assignment for small/large-k Hamerly path");
             }
         }
     }

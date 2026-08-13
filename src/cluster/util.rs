@@ -219,138 +219,20 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
     best_cluster
 }
 
-/// Three-stage Gk-means assignment (Sharma et al. 2025).
-///
-/// Stage 1 (LE): inter-centroid distance check skips points whose assignment
-/// provably cannot change. Stage 2 (LHE): identifies candidate centroids that
-/// could steal the point. Stage 3 (HE): scalar projection test prunes
-/// candidates without computing full distances (Euclidean-only; non-Euclidean
-/// metrics fall back to distance computation for Stage 2 candidates).
-///
-/// O(k^2) centroid-pair precomputation, O(n) scan with per-centroid pruning.
-#[cfg(not(feature = "parallel"))]
-pub(crate) fn geometric_assign<D: DistanceMetric>(
+pub(crate) fn assign_all<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
     centroids: &[Vec<f32>],
     labels: &mut [usize],
-    centroid_shifts: &[f32],
     metric: &D,
-    first_iter: bool,
 ) {
-    let n = data.n();
-    let k = centroids.len();
-
-    if first_iter || k <= 1 {
-        #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
-        for i in 0..n {
-            let mut best = f32::MAX;
-            let mut best_k = 0;
-            for (j, c) in centroids.iter().enumerate() {
-                let d = metric.distance(data.row(i), c);
-                if d < best {
-                    best = d;
-                    best_k = j;
-                }
-            }
-            labels[i] = best_k;
-        }
-        return;
-    }
-
-    // Precompute half inter-centroid distances.
-    let mut half_inter = vec![vec![0.0f32; k]; k];
-    for j1 in 0..k {
-        for j2 in (j1 + 1)..k {
-            let d = metric.distance(&centroids[j1], &centroids[j2]) * 0.5;
-            half_inter[j1][j2] = d;
-            half_inter[j2][j1] = d;
-        }
-    }
-
-    // Precompute squared norms for scalar projection (HE stage).
-    // For the midplane test: dot(x - m, dir) = dot(x, c_j - c_a) - (||c_j||^2 - ||c_a||^2) / 2
-    // The last term depends only on centroid norms, precomputed here.
-    let use_projection = metric.supports_expanded_form();
-    let centroid_sq_norms: Vec<f32> = if use_projection {
-        centroids
-            .iter()
-            .map(|c| c.iter().map(|&v| v * v).sum())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
-    for i in 0..n {
-        let a = labels[i];
-        let a_shift = centroid_shifts[a];
-
-        // Stage 1 (LE): if half_inter[a][j] > shift(a) + shift(j) for ALL j,
-        // no centroid can steal this point. Skip entirely.
-        let mut can_skip = true;
-        for j in 0..k {
-            if j == a {
-                continue;
-            }
-            if half_inter[a][j] <= a_shift + centroid_shifts[j] {
-                can_skip = false;
-                break;
-            }
-        }
-        if can_skip {
-            continue;
-        }
-
-        // Stage 2 (LHE): identify candidate centroids that could steal the point.
-        // Only centroids where half_inter[a][j] <= shift(a) + shift(j) need checking.
-
-        // Compute distance to the assigned centroid (needed for comparison).
-        let point = data.row(i);
-        let dist_a = metric.distance(point, &centroids[a]);
-        let mut best = dist_a;
-        let mut best_k = a;
-
-        for j in 0..k {
-            if j == a {
-                continue;
-            }
-            // Stage 2 filter: skip centroids that can't possibly be closer.
-            if half_inter[a][j] > a_shift + centroid_shifts[j] {
-                continue;
-            }
-
-            // Stage 3 (HE): scalar projection test (Euclidean-only).
-            // The midplane between c_a and c_j divides space: points on c_j's
-            // side satisfy dot(x - m, c_j - c_a) > 0 where m = (c_a + c_j)/2.
-            // Expanding: dot(x, c_j - c_a) - (||c_j||^2 - ||c_a||^2) / 2 > 0
-            // If the point is on c_a's side, c_j cannot be closer.
-            if use_projection {
-                let ca = &centroids[a];
-                let cj = &centroids[j];
-                let mut dot_x_dir = 0.0f32;
-                for (idx, &xv) in point.iter().enumerate() {
-                    dot_x_dir += xv * (cj[idx] - ca[idx]);
-                }
-                let bias = (centroid_sq_norms[j] - centroid_sq_norms[a]) * 0.5;
-                if dot_x_dir <= bias {
-                    // Point is on c_a's side of the midplane; c_j cannot be closer.
-                    continue;
-                }
-            }
-
-            // Full distance computation for this candidate.
-            let d = metric.distance(point, &centroids[j]);
-            if d < best {
-                best = d;
-                best_k = j;
-            }
-        }
-        labels[i] = best_k;
+    for (i, label) in labels.iter_mut().enumerate() {
+        *label = assign_nearest(data.row(i), centroids, metric);
     }
 }
 
 /// Parallel Hamerly assignment using rayon.
 #[cfg(feature = "parallel")]
+#[allow(dead_code)] // Disabled pending full state-transition parity with Lloyd assignment.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
@@ -372,6 +254,11 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
     flat_buf.clear();
     flat_buf.extend(centroids.iter().flat_map(|c| c.iter().copied()));
     let flat_centroids = &*flat_buf;
+    let bound_distance = |point: &[f32], centroid: &[f32]| {
+        metric
+            .hamerly_distance(point, centroid)
+            .expect("Hamerly assignment requires a built-in Euclidean metric")
+    };
 
     if first_iter || k <= 1 {
         let results: Vec<(usize, f32, f32)> = (0..n)
@@ -382,7 +269,7 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
                 let mut best_k = 0;
                 for j in 0..k {
                     let c = &flat_centroids[j * dim..(j + 1) * dim];
-                    let d = metric.distance(data.row(i), c);
+                    let d = bound_distance(data.row(i), c);
                     if d < best {
                         second = best;
                         best = d;
@@ -436,7 +323,7 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
 
             // Tighten upper bound using flat centroids.
             let old_c = &flat_centroids[old_label * dim..(old_label + 1) * dim];
-            u = metric.distance(data.row(i), old_c);
+            u = bound_distance(data.row(i), old_c);
 
             if u <= l {
                 return (old_label, u, l);
@@ -454,7 +341,7 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
                     continue;
                 }
                 let c = &flat_centroids[j * dim..(j + 1) * dim];
-                let dist = metric.distance(data.row(i), c);
+                let dist = bound_distance(data.row(i), c);
                 if dist < best {
                     second = best;
                     best = dist;
@@ -475,6 +362,7 @@ pub(crate) fn hamerly_assign_parallel<D: DistanceMetric>(
 }
 
 #[cfg(not(feature = "parallel"))]
+#[allow(dead_code)] // Disabled pending full state-transition parity with Lloyd assignment.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hamerly_assign<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
@@ -503,12 +391,15 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
     let flat_centroids = &*flat_buf;
 
     let batch_dist = |point: &[f32], centroid_idx: usize| -> f32 {
-        if use_flat {
+        let centroid = if use_flat {
             let c = &flat_centroids[centroid_idx * dim..(centroid_idx + 1) * dim];
-            metric.distance(point, c)
+            c
         } else {
-            metric.distance(point, &centroids[centroid_idx])
-        }
+            &centroids[centroid_idx]
+        };
+        metric
+            .hamerly_distance(point, centroid)
+            .expect("Hamerly assignment requires a built-in Euclidean metric")
     };
 
     if first_iter || k <= 1 {
@@ -600,132 +491,6 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
     }
 
     recomputed
-}
-
-/// Precompute squared norms for each vector.
-pub(crate) fn squared_norms(data: &(impl DataRef + ?Sized)) -> Vec<f32> {
-    (0..data.n())
-        .map(|i| data.row(i).iter().map(|&x| x * x).sum())
-        .collect()
-}
-
-/// Assign each point to nearest centroid using expanded squared Euclidean:
-/// `||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c`
-///
-/// Returns (labels, upper_bounds, lower_bounds) where upper_bounds[i] is the
-/// squared distance from point i to its assigned centroid, and lower_bounds[i]
-/// is the distance to the second-nearest centroid.
-#[cfg(not(feature = "parallel"))]
-pub(crate) fn assign_expanded(
-    data: &(impl DataRef + ?Sized),
-    centroids: &[Vec<f32>],
-    data_norms: &[f32],
-    centroid_norms: &[f32],
-) -> (Vec<usize>, Vec<f32>, Vec<f32>) {
-    let n = data.n();
-    let k = centroids.len();
-    let dim = if k > 0 { centroids[0].len() } else { 0 };
-
-    let mut labels = vec![0usize; n];
-    let mut upper = vec![f32::MAX; n];
-    let mut lower = vec![f32::MAX; n];
-
-    // Flatten centroids for cache-friendly access.
-    let flat_c: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
-
-    for i in 0..n {
-        let xn = data_norms[i];
-        let mut best_dist = f32::MAX;
-        let mut second_dist = f32::MAX;
-        let mut best_k = 0;
-
-        let point = data.row(i);
-        for j in 0..k {
-            let cn = centroid_norms[j];
-            let c_slice = &flat_c[j * dim..(j + 1) * dim];
-            #[cfg(feature = "simd")]
-            let dot = if dim >= 16 {
-                innr::dot(point, c_slice)
-            } else {
-                point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum()
-            };
-            #[cfg(not(feature = "simd"))]
-            let dot: f32 = point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
-            let dist = (xn + cn - 2.0 * dot).max(0.0);
-            if dist < best_dist {
-                second_dist = best_dist;
-                best_dist = dist;
-                best_k = j;
-            } else if dist < second_dist {
-                second_dist = dist;
-            }
-        }
-        labels[i] = best_k;
-        upper[i] = best_dist;
-        lower[i] = second_dist;
-    }
-
-    (labels, upper, lower)
-}
-
-/// Parallel version of [`assign_expanded`].
-#[cfg(feature = "parallel")]
-pub(crate) fn assign_expanded_parallel(
-    data: &(impl DataRef + ?Sized),
-    centroids: &[Vec<f32>],
-    data_norms: &[f32],
-    centroid_norms: &[f32],
-) -> (Vec<usize>, Vec<f32>, Vec<f32>) {
-    use rayon::prelude::*;
-
-    let k = centroids.len();
-    let dim = if k > 0 { centroids[0].len() } else { 0 };
-
-    let flat_c: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
-
-    let results: Vec<(usize, f32, f32)> = (0..data.n())
-        .into_par_iter()
-        .map(|i| {
-            let point = data.row(i);
-            let xn = data_norms[i];
-            let mut best_dist = f32::MAX;
-            let mut second_dist = f32::MAX;
-            let mut best_k = 0;
-
-            for j in 0..k {
-                let cn = centroid_norms[j];
-                let c_slice = &flat_c[j * dim..(j + 1) * dim];
-                #[cfg(feature = "simd")]
-                let dot = if dim >= 16 {
-                    innr::dot(point, c_slice)
-                } else {
-                    point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum()
-                };
-                #[cfg(not(feature = "simd"))]
-                let dot: f32 = point.iter().zip(c_slice).map(|(&a, &b)| a * b).sum();
-                let dist = (xn + cn - 2.0 * dot).max(0.0);
-                if dist < best_dist {
-                    second_dist = best_dist;
-                    best_dist = dist;
-                    best_k = j;
-                } else if dist < second_dist {
-                    second_dist = dist;
-                }
-            }
-            (best_k, best_dist, second_dist)
-        })
-        .collect();
-
-    let n = data.n();
-    let mut labels = vec![0usize; n];
-    let mut upper = vec![0.0f32; n];
-    let mut lower = vec![0.0f32; n];
-    for (i, (lbl, u, l)) in results.into_iter().enumerate() {
-        labels[i] = lbl;
-        upper[i] = u;
-        lower[i] = l;
-    }
-    (labels, upper, lower)
 }
 
 /// Compute pairwise distance matrix for n points. Returns flat n*n row-major vec.
@@ -944,13 +709,6 @@ mod tests {
         let data = vec![vec![0.0], vec![10.0]];
         let mv = mean_variance(&data);
         assert!(mv > 0.0, "spread data should have positive variance");
-    }
-
-    #[test]
-    fn squared_norms_basic() {
-        let data = vec![vec![3.0, 4.0]];
-        let norms = squared_norms(&data);
-        assert!((norms[0] - 25.0).abs() < 1e-6);
     }
 
     #[test]

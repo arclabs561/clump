@@ -53,6 +53,10 @@ harness = false
 [[bench]]
 name = "comparison"
 harness = false
+
+[[bench]]
+name = "mnist_comparison"
+harness = false
 [package.metadata.docs.rs]
 features = ["parallel"]
 rustdoc-args = ["--cfg", "docsrs"]

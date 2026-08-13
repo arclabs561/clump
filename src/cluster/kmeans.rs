@@ -318,13 +318,26 @@ impl<D: DistanceMetric> Kmeans<D> {
 
         // Initialize centroids: use provided centroids (warm-start) or k-means++.
         let mut centroids = if let Some(ref init) = self.init_centroids {
-            assert_eq!(
-                init.len(),
-                self.k,
-                "init_centroids length ({}) must equal k ({})",
-                init.len(),
-                self.k
-            );
+            if init.len() != self.k {
+                return Err(Error::InvalidParameter {
+                    name: "centroids",
+                    message: "count must equal k",
+                });
+            }
+            for centroid in init {
+                if centroid.len() != d {
+                    return Err(Error::DimensionMismatch {
+                        expected: d,
+                        found: centroid.len(),
+                    });
+                }
+                if centroid.iter().any(|value| !value.is_finite()) {
+                    return Err(Error::InvalidParameter {
+                        name: "centroids",
+                        message: "values must be finite",
+                    });
+                }
+            }
             init.clone()
         } else {
             util::kmeanspp_init(data, self.k, &self.metric, self.seeding_alpha, &mut rng)
@@ -336,51 +349,8 @@ impl<D: DistanceMetric> Kmeans<D> {
         let mut new_centroids = vec![vec![0.0f32; d]; self.k];
         let mut counts = vec![0usize; self.k];
 
-        // Hamerly bounds: per-point upper (dist to assigned centroid) and
-        // lower (dist to second-nearest centroid). When upper <= lower,
-        // the assignment cannot change and we skip distance computation.
-        // O(n) extra memory (Hamerly, SDM 2010).
-        let mut upper_bounds = vec![f32::MAX; n];
-        let mut lower_bounds = vec![0.0f32; n];
-        let mut centroid_shifts = vec![0.0f32; self.k];
         let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
-        let mut flat_buf: Vec<f32> = Vec::with_capacity(self.k * d);
         let mut inertia_trace: Vec<f32> = Vec::with_capacity(self.max_iter);
-
-        // Precompute squared norms for expanded-form first-iteration assignment.
-        // Only valid for SquaredEuclidean (||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c).
-        let use_expanded = self.metric.supports_expanded_form();
-        let data_norms: Vec<f32> = if use_expanded {
-            util::squared_norms(data)
-        } else {
-            Vec::new()
-        };
-
-        // GPU acceleration: initialize Metal compute pipeline for assignment
-        // when using SquaredEuclidean and problem is large enough to amortize
-        // GPU setup overhead. Buffers for data, labels, and params are allocated
-        // once here and reused across iterations.
-        #[cfg(all(feature = "gpu", target_os = "macos"))]
-        let gpu_assigner = if self.metric.supports_expanded_form() && n * self.k >= 500_000 {
-            let data_flat = super::gpu::flatten(data);
-            super::gpu::GpuAssigner::new(&data_flat, n, self.k, d)
-        } else {
-            None
-        };
-
-        // BLAS GEMM for first-iteration assignment (when blas feature enabled).
-        // matrixmultiply's optimized SGEMM beats per-point distance loops
-        // for large n*k due to micro-kernel SIMD and cache optimization.
-        #[cfg(feature = "blas")]
-        let use_blas = n * self.k >= 100_000 && self.metric.supports_expanded_form();
-        #[cfg(feature = "blas")]
-        let blas_data = if use_blas {
-            let fd = super::flat::FlatMatrix::from_data(data);
-            let xn = fd.row_norms_sq();
-            Some((fd, xn))
-        } else {
-            None
-        };
 
         let mut iters = 0usize;
         for iter in 0..self.max_iter {
@@ -392,115 +362,10 @@ impl<D: DistanceMetric> Kmeans<D> {
             }
             counts.fill(0);
 
-            // Assignment step.
-            // Priority: GPU > BLAS GEMM (first iter) > Hamerly bounds.
-            #[cfg(feature = "blas")]
-            let blas_used = if iter == 0 && use_blas {
-                if let Some((ref fd, ref xn)) = blas_data {
-                    let fc = super::flat::FlatMatrix::from_data(&centroids);
-                    let cn = fc.row_norms_sq();
-                    let (new_labels, new_upper) = fd.blas_assign(&fc, xn, &cn);
-                    labels.copy_from_slice(&new_labels);
-                    for i in 0..n {
-                        upper_bounds[i] = new_upper[i];
-                        lower_bounds[i] = 0.0;
-                    }
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            #[cfg(not(feature = "blas"))]
-            let blas_used = false;
-
-            #[cfg(all(feature = "gpu", target_os = "macos"))]
-            let gpu_used = if !blas_used {
-                if let Some(ref assigner) = gpu_assigner {
-                    let centroids_flat = super::gpu::flatten(&centroids);
-                    let gpu_labels = assigner.assign(&centroids_flat);
-                    labels.copy_from_slice(&gpu_labels);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            #[cfg(not(all(feature = "gpu", target_os = "macos")))]
-            let gpu_used = blas_used; // skip Hamerly if BLAS handled it
-
-            if !gpu_used {
-                // First iteration with expanded squared Euclidean: replace
-                // brute-force distance loops with dot-product + precomputed norms.
-                // ||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c avoids per-element
-                // subtraction and squaring; the dot product is more SIMD-friendly.
-                let expanded_used = if iter == 0 && use_expanded {
-                    let centroid_norms = util::squared_norms(&centroids);
-                    #[cfg(feature = "parallel")]
-                    let (new_labels, new_upper, new_lower) = util::assign_expanded_parallel(
-                        data,
-                        &centroids,
-                        &data_norms,
-                        &centroid_norms,
-                    );
-                    #[cfg(not(feature = "parallel"))]
-                    let (new_labels, new_upper, new_lower) =
-                        util::assign_expanded(data, &centroids, &data_norms, &centroid_norms);
-                    labels.copy_from_slice(&new_labels);
-                    upper_bounds.copy_from_slice(&new_upper);
-                    lower_bounds.copy_from_slice(&new_lower);
-                    true
-                } else {
-                    false
-                };
-
-                if !expanded_used {
-                    // Hamerly bounds-based assignment: skips distance computation
-                    // for points whose assignment provably cannot change.
-                    #[cfg(feature = "parallel")]
-                    {
-                        util::hamerly_assign_parallel(
-                            data,
-                            &centroids,
-                            &mut labels,
-                            &mut upper_bounds,
-                            &mut lower_bounds,
-                            &centroid_shifts,
-                            &self.metric,
-                            iter == 0,
-                            &mut flat_buf,
-                        );
-                    }
-
-                    #[cfg(not(feature = "parallel"))]
-                    if self.k <= 64 {
-                        // Gk-means three-stage filter (Sharma et al. 2025):
-                        // per-centroid pruning via inter-centroid + midplane tests.
-                        util::geometric_assign(
-                            data,
-                            &centroids,
-                            &mut labels,
-                            &centroid_shifts,
-                            &self.metric,
-                            iter == 0,
-                        );
-                    } else {
-                        util::hamerly_assign(
-                            data,
-                            &centroids,
-                            &mut labels,
-                            &mut upper_bounds,
-                            &mut lower_bounds,
-                            &centroid_shifts,
-                            &self.metric,
-                            iter == 0,
-                            &mut flat_buf,
-                        );
-                    }
-                }
-            }
+            // Exact Lloyd assignment is the correctness baseline for every
+            // metric. Bound-pruned paths remain disabled until their complete
+            // state transition is proven equivalent to this oracle.
+            util::assign_all(data, &centroids, &mut labels, &self.metric);
 
             // Update step: accumulate in f64 to avoid precision loss at
             // large n (sklearn pattern). f32 accumulation loses ~2.5 digits
@@ -567,12 +432,15 @@ impl<D: DistanceMetric> Kmeans<D> {
             // distance computation -- profiler finding #3).
             let mut shift = 0.0f32;
             for k in 0..self.k {
-                let d = self.metric.distance(&centroids[k], &new_centroids[k]);
-                centroid_shifts[k] = d;
-                // Convergence uses sum of squared element-wise shifts.
-                // For SquaredEuclidean, d == sum((a-b)^2) already.
-                // For other metrics, d is the metric distance.
-                shift += d;
+                let squared_coordinate_shift: f32 = centroids[k]
+                    .iter()
+                    .zip(&new_centroids[k])
+                    .map(|(&old, &new)| {
+                        let delta = old - new;
+                        delta * delta
+                    })
+                    .sum();
+                shift += squared_coordinate_shift;
             }
 
             std::mem::swap(&mut centroids, &mut new_centroids);

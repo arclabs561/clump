@@ -20,6 +20,15 @@ pub trait DistanceMetric: Clone + Send + Sync {
         false
     }
 
+    /// Distance in units suitable for triangle-inequality assignment bounds.
+    ///
+    /// This is not used by the production K-means path; it remains private to
+    /// the crate's experimental bound-pruning helpers.
+    #[doc(hidden)]
+    fn hamerly_distance(&self, _a: &[f32], _b: &[f32]) -> Option<f32> {
+        None
+    }
+
     /// Whether centroids should be L2-normalized after each update step.
     ///
     /// For cosine-based k-means, the correct centroid is the L2-normalized
@@ -41,13 +50,9 @@ impl DistanceMetric for SquaredEuclidean {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
-        // innr's SIMD 3-dot expansion (||a||^2 + ||b||^2 - 2*dot) wins for
-        // d >= 32 where SIMD throughput dominates. For d < 32, the compiler's
-        // auto-vectorization of the direct (a-b)^2 loop is faster.
-        #[cfg(feature = "simd")]
-        if a.len() >= 32 {
-            return innr::l2_distance_squared(a, b);
-        }
+        // Keep the direct subtraction form. The three-dot expansion
+        // `||a||^2 + ||b||^2 - 2*a.b` catastrophically cancels when vectors
+        // have a large common offset.
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| {
@@ -57,8 +62,8 @@ impl DistanceMetric for SquaredEuclidean {
             .sum()
     }
 
-    fn supports_expanded_form(&self) -> bool {
-        true
+    fn hamerly_distance(&self, a: &[f32], b: &[f32]) -> Option<f32> {
+        Some(self.distance(a, b).max(0.0).sqrt())
     }
 }
 
@@ -69,11 +74,11 @@ pub struct Euclidean;
 impl DistanceMetric for Euclidean {
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        #[cfg(feature = "simd")]
-        if a.len() >= 32 {
-            return innr::l2_distance(a, b);
-        }
         SquaredEuclidean.distance(a, b).sqrt()
+    }
+
+    fn hamerly_distance(&self, a: &[f32], b: &[f32]) -> Option<f32> {
+        Some(self.distance(a, b))
     }
 }
 

@@ -240,15 +240,15 @@ impl FlatMatrix {
         unsafe {
             matrixmultiply::sgemm(
                 n,   // m
-                k,   // n (output cols)
-                d,   // k (inner dim)
+                d,   // k (inner dimension)
+                k,   // n (output columns)
                 1.0, // alpha
                 self.data.as_ptr(),
                 d as isize, // row stride of X
                 1,          // col stride of X
                 centroids.data.as_ptr(),
-                d as isize, // row stride of C (each centroid is a row)
-                1,          // col stride of C
+                1,          // row stride of C^T (feature axis)
+                d as isize, // col stride of C^T (centroid axis)
                 0.0,        // beta
                 xct.as_mut_ptr(),
                 k as isize, // row stride of output
@@ -309,6 +309,88 @@ mod tests {
         assert_eq!(labels[1], 0);
         assert_eq!(labels[2], 1);
         assert_eq!(labels[3], 1);
+    }
+
+    #[cfg(feature = "blas")]
+    #[test]
+    fn blas_assign_non_square_matches_direct_distance() {
+        let data = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![9.0, 8.0, 7.0],
+            vec![4.0, 5.0, 6.0],
+            vec![-2.0, -1.0, 0.0],
+            vec![7.0, 3.0, 1.0],
+        ];
+        let centroids = vec![
+            vec![1.0, 2.0, 2.0],
+            vec![8.0, 7.0, 6.0],
+            vec![-1.0, 0.0, 1.0],
+            vec![6.0, 3.0, 2.0],
+        ];
+        let flat_data = FlatMatrix::from_vecs(&data);
+        let flat_centroids = FlatMatrix::from_vecs(&centroids);
+        let (actual, _) = flat_data.blas_assign(
+            &flat_centroids,
+            &flat_data.row_norms_sq(),
+            &flat_centroids.row_norms_sq(),
+        );
+        let expected: Vec<usize> = data
+            .iter()
+            .map(|point| {
+                centroids
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        let distance = |center: &&Vec<f32>| {
+                            point
+                                .iter()
+                                .zip(center.iter())
+                                .map(|(&x, &c)| (x - c) * (x - c))
+                                .sum::<f32>()
+                        };
+                        distance(a).total_cmp(&distance(b))
+                    })
+                    .unwrap()
+                    .0
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "blas")]
+    #[test]
+    fn blas_assign_at_former_dispatch_threshold_matches_direct() {
+        let data: Vec<Vec<f32>> = (0..1000)
+            .map(|i| vec![i as f32 * 0.01, (i % 17) as f32, (i % 31) as f32])
+            .collect();
+        let centroids: Vec<Vec<f32>> = (0..100)
+            .map(|i| vec![i as f32 * 0.1, (i % 17) as f32, (i % 31) as f32])
+            .collect();
+        let flat_data = FlatMatrix::from_vecs(&data);
+        let flat_centroids = FlatMatrix::from_vecs(&centroids);
+        let (actual, _) = flat_data.blas_assign(
+            &flat_centroids,
+            &flat_data.row_norms_sq(),
+            &flat_centroids.row_norms_sq(),
+        );
+        for (i, point) in data.iter().enumerate() {
+            let expected = centroids
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    let distance = |center: &&Vec<f32>| {
+                        point
+                            .iter()
+                            .zip(center.iter())
+                            .map(|(&x, &c)| (x - c) * (x - c))
+                            .sum::<f32>()
+                    };
+                    distance(a).total_cmp(&distance(b))
+                })
+                .unwrap()
+                .0;
+            assert_eq!(actual[i], expected, "assignment mismatch at row {i}");
+        }
     }
 
     #[test]

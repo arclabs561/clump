@@ -956,6 +956,97 @@ fn kmeans_fit_predict_equals_fit_then_predict() {
     );
 }
 
+#[test]
+fn kmeans_reassigns_points_after_centroids_move() {
+    let data = vec![vec![4.0], vec![18.0], vec![24.0], vec![25.0], vec![27.0]];
+    let initial = vec![vec![4.0], vec![24.0], vec![27.0]];
+
+    let fit = Kmeans::new(3)
+        .with_centroids(initial)
+        .with_tol(1e-12)
+        .with_max_iter(20)
+        .fit(&data)
+        .unwrap();
+
+    assert_eq!(fit.labels, vec![0, 1, 2, 2, 2]);
+    assert_eq!(fit.predict(&data).unwrap(), fit.labels);
+}
+
+#[test]
+fn kmeans_large_offset_matches_translated_data() {
+    let base = vec![vec![0.0], vec![0.125], vec![1.0], vec![1.125]];
+    let shifted: Vec<Vec<f32>> = base.iter().map(|point| vec![point[0] + 10_000.0]).collect();
+    let base_fit = Kmeans::new(2)
+        .with_centroids(vec![vec![0.0], vec![1.0]])
+        .with_max_iter(20)
+        .fit(&base)
+        .unwrap();
+    let shifted_fit = Kmeans::new(2)
+        .with_centroids(vec![vec![10_000.0], vec![10_001.0]])
+        .with_max_iter(20)
+        .fit(&shifted)
+        .unwrap();
+    assert_eq!(shifted_fit.labels, base_fit.labels);
+    assert!((shifted_fit.wcss(&shifted) - base_fit.wcss(&base)).abs() < 1e-5);
+}
+
+#[test]
+fn kmeans_scale_does_not_change_partition() {
+    let data = vec![vec![0.0], vec![1.0], vec![4.0], vec![5.0], vec![9.0]];
+    let initial = vec![vec![0.0], vec![4.0], vec![9.0]];
+    let reference = Kmeans::new(3)
+        .with_centroids(initial.clone())
+        .fit(&data)
+        .unwrap();
+    for scale in [1_000.0, 1_000_000.0] {
+        let scaled: Vec<Vec<f32>> = data.iter().map(|point| vec![point[0] * scale]).collect();
+        let scaled_initial: Vec<Vec<f32>> =
+            initial.iter().map(|point| vec![point[0] * scale]).collect();
+        let fit = Kmeans::new(3)
+            .with_centroids(scaled_initial)
+            .fit(&scaled)
+            .unwrap();
+        assert_eq!(fit.labels, reference.labels);
+    }
+}
+
+#[derive(Clone)]
+struct CustomSquared;
+
+impl DistanceMetric for CustomSquared {
+    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        a.iter().zip(b).map(|(&x, &y)| (x - y) * (x - y)).sum()
+    }
+}
+
+#[test]
+fn kmeans_custom_metric_uses_exact_assignments() {
+    let data = vec![vec![4.0], vec![18.0], vec![24.0], vec![25.0], vec![27.0]];
+    let fit = Kmeans::with_metric(3, CustomSquared)
+        .with_centroids(vec![vec![4.0], vec![24.0], vec![27.0]])
+        .with_tol(1e-12)
+        .fit(&data)
+        .unwrap();
+    assert_eq!(fit.labels, vec![0, 1, 2, 2, 2]);
+}
+
+#[test]
+fn kmeans_rejects_invalid_warm_start() {
+    let data = vec![vec![0.0, 1.0], vec![2.0, 3.0]];
+    assert!(Kmeans::new(2)
+        .with_centroids(vec![vec![0.0, 1.0]])
+        .fit(&data)
+        .is_err());
+    assert!(Kmeans::new(2)
+        .with_centroids(vec![vec![0.0], vec![2.0]])
+        .fit(&data)
+        .is_err());
+    assert!(Kmeans::new(2)
+        .with_centroids(vec![vec![f32::NAN, 1.0], vec![2.0, 3.0]])
+        .fit(&data)
+        .is_err());
+}
+
 /// sklearn: predict(centroids) returns identity [0, 1, ..., k-1].
 #[test]
 fn kmeans_predict_centroids_is_identity() {
@@ -1230,9 +1321,9 @@ fn kmeans_very_small_tol_converges() {
 // Test 1: Lloyd/Hamerly parity -- nearest centroid invariant
 // ============================================================================
 
-/// k=5 exercises the geometric assign path (k<=20).
+/// k=5 exercises Hamerly assignment with nested centroid vectors.
 #[test]
-fn kmeans_nearest_centroid_geometric_path() {
+fn kmeans_nearest_centroid_small_k_path() {
     use rand::prelude::*;
     let mut rng = StdRng::seed_from_u64(99);
     let data: Vec<Vec<f32>> = (0..200)
@@ -1246,7 +1337,7 @@ fn kmeans_nearest_centroid_geometric_path() {
     verify_nearest_assignment(&data, &fit.centroids, &fit.labels);
 }
 
-/// k=25 exercises the Hamerly bounds path (k>20).
+/// k=25 exercises Hamerly assignment with the flat centroid buffer.
 #[test]
 fn kmeans_nearest_centroid_hamerly_path() {
     use rand::prelude::*;
