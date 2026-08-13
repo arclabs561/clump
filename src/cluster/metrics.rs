@@ -2,10 +2,10 @@
 //!
 //! Functions for evaluating clustering quality without ground-truth labels.
 //!
-//! - [`silhouette_score`]: how well each point fits its cluster vs neighbors (-1 to 1)
-//! - [`calinski_harabasz`]: ratio of between-cluster to within-cluster variance (higher = better)
-//! - [`davies_bouldin`]: average worst-case cluster similarity (lower = better)
-//! - [`disco_score`]: density-connectivity silhouette with noise evaluation (Beer et al. 2025)
+//! - [`silhouette_score`](crate::cluster::metrics::silhouette_score): how well each point fits its cluster vs neighbors (-1 to 1)
+//! - [`calinski_harabasz`](crate::cluster::metrics::calinski_harabasz): ratio of between-cluster to within-cluster variance (higher = better)
+//! - [`davies_bouldin`](crate::cluster::metrics::davies_bouldin): average worst-case cluster similarity (lower = better)
+//! - [`disco_score`](crate::cluster::metrics::disco_score): density-connectivity silhouette with noise evaluation (Beer et al. 2025)
 
 use super::distance::DistanceMetric;
 use super::flat::DataRef;

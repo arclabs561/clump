@@ -11,10 +11,10 @@
 //! centroids via AM energy descent, and the clustering loss measures how much
 //! each point moves during contraction.
 //!
-//! - [`am_assign`]: hard (nearest-centroid) cluster assignment
-//! - [`am_soft_assign`]: soft (probabilistic) cluster assignment
-//! - [`am_contract`]: contract a point toward centroids via AM energy descent
-//! - [`clam_loss`]: differentiable clustering loss
+//! - [`am_assign`](crate::clam::am_assign): hard (nearest-centroid) cluster assignment
+//! - [`am_soft_assign`](crate::clam::am_soft_assign): soft (probabilistic) cluster assignment
+//! - [`am_contract`](crate::clam::am_contract): contract a point toward centroids via AM energy descent
+//! - [`clam_loss`](crate::clam::clam_loss): differentiable clustering loss
 
 /// Hard assignment of points to cluster centroids (nearest centroid by Euclidean distance).
 ///

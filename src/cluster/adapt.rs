@@ -1,4 +1,4 @@
-//! Adapters for converting external data to clump's [`DataRef`](super::flat::DataRef) input.
+//! Adapters for converting external data to clump's [`DataRef`](crate::cluster::DataRef) input.
 
 /// Convert an ndarray `Array2<f32>` to clump's input format.
 ///
