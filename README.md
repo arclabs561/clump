@@ -112,7 +112,11 @@ Also see `edges_from_distances` to build signed edges from a distance matrix.
 
 ## Distance metrics
 
-All algorithms are generic over `DistanceMetric`. Built-in: `SquaredEuclidean`, `Euclidean`, `CosineDistance`, `InnerProductDistance`, `CompositeDistance`. Use `with_metric` on any algorithm to swap. Custom metrics: implement `DistanceMetric` (one method: `fn distance(&self, a: &[f32], b: &[f32]) -> f32`).
+The vector-input algorithms that expose `with_metric` are generic over
+`DistanceMetric`; correlation clustering instead consumes weighted edges.
+Built-in metrics are `SquaredEuclidean`, `Euclidean`, `CosineDistance`,
+`InnerProductDistance`, and `CompositeDistance`. Custom metrics implement
+`DistanceMetric` (`fn distance(&self, a: &[f32], b: &[f32]) -> f32`).
 
 ## Features
 
