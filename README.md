@@ -127,8 +127,8 @@ Optional features: `parallel` (Rayon), `gpu` (Metal k-means on macOS), `serde`,
 
 ## Examples
 
-See [`examples/README.md`](examples/README.md) for the full gallery: each
-example states the question it answers, the run command, and real sample output.
+See [`examples/README.md`](examples/README.md) for run commands and sample
+output.
 
 | Example | What it shows |
 |---------|---------------|

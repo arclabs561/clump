@@ -1,10 +1,7 @@
 # clump examples
 
-Each example answers one question and is runnable as-is. Examples that need a
-dataset are **data-gated**: they exit 0 with a message telling you which fetch
-script to run, so they are safe to compile/run in CI.
-
-All outputs below are real, captured from a run.
+Examples that need a dataset exit successfully with a message naming the fetch
+script when the data is absent.
 
 ## Getting started
 
@@ -147,15 +144,15 @@ cargo run --release --example mnist_kmeans_ari
 images: 10000  dims: 784  classes: 10
 
 external (vs true digit labels):
-  ARI     = 0.2619
-  NMI     = 0.4030
-  purity  = 0.4652
+  ARI     = 0.3468
+  NMI     = 0.4808
+  purity  = 0.5366
 internal (cluster geometry):
-  silhouette = 0.0415
+  silhouette = 0.0556
 ```
 
-Plain k-means on raw pixels recovers moderate digit structure (ARI 0.26); the
-gap to 1.0 is the well-known limit of Euclidean k-means on unprocessed images.
+This run uses Euclidean k-means on unprocessed pixels; the reported scores are
+descriptive, not a benchmark against other representations or algorithms.
 
 ## Datasets
 

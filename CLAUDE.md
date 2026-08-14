@@ -81,10 +81,6 @@ before relying on those results for a different toolchain or machine.
 - Cross-algorithm: OPTICS extract_clusters(eps) must match DBSCAN(eps) cluster structure
 - Key invariants tested: labels in range, predict consistency, WCSS non-negative, min_cluster_size enforced, ordering is permutation
 
-## Known issues
-
-- k-means|| (parallel init) benchmarked and rejected: 2.3x slower than k-means++ at k=100
-
 ## Benchmarking
 
 Run `cargo bench` for the full suite. Key configs:
