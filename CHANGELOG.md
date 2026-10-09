@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-09
+
 ### Changed
 
 - DenStream now buffers 1,000 raw points for its initialization phase and uses
@@ -12,6 +14,23 @@
   radius, offline reachability, and prediction share units. Explicit legacy
   squared-distance behavior is available through
   `new_squared_euclidean_legacy`.
+
+### Added
+
+- `DistanceMetric::distance_is_squared` (default `true`). A metric that returns
+  plain distances, such as `Euclidean`, overrides it to `false`.
+
+### Fixed
+
+- k-means++ seeding with `Euclidean` now samples proportional to D^2, as with
+  `SquaredEuclidean`. It sampled proportional to D before, and both metrics
+  now pick the same seeds from the same RNG stream.
+- Correlation clustering breaks ties toward the smaller cluster pair and sorts
+  contracted edges, so `.with_seed` fits are reproducible. Ties were broken in
+  `HashMap` order before.
+- OPTICS with `min_pts = 1` gives each point a core distance of zero.
+- COP-k-means sorts candidates with `total_cmp`. A NaN distance compared as
+  equal to everything before, which made the sort order inconsistent.
 
 ## [0.5.8] - 2026-07-03
 
