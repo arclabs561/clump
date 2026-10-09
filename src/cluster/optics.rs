@@ -130,6 +130,9 @@ impl<D: DistanceMetric> Optics<D> {
         // (min_pts-1)-th nearest neighbor within max_epsilon.
         // Uses partial sort (select_nth_unstable) instead of full sort.
         let compute_core = |i: usize| -> f32 {
+            if self.min_pts == 1 {
+                return 0.0; // The point alone satisfies min_pts.
+            }
             let mut neighbor_dists: Vec<f32> = (0..n)
                 .filter(|&j| j != i)
                 .map(|j| self.metric.distance(data.row(i), data.row(j)))
@@ -359,6 +362,15 @@ impl<D: DistanceMetric> Optics<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn min_pts_one_makes_every_point_core_at_distance_zero() {
+        // With min_pts = 1 the neighborhood of a point is the point itself, so
+        // every point is a core point with core distance 0 (Ankerst et al. 1999).
+        let data = vec![vec![0.0, 0.0], vec![0.5, 0.0], vec![5.0, 5.0]];
+        let result = Optics::new(1.0, 1).fit(&data).unwrap();
+        assert_eq!(result.core_distances, vec![0.0; 3]);
+    }
 
     #[test]
     fn basic_optics() {
