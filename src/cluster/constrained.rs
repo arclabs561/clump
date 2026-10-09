@@ -247,7 +247,7 @@ impl<D: DistanceMetric> CopKmeans<D> {
             candidates.clear();
             candidates
                 .extend((0..self.k).map(|k| (k, self.metric.distance(data.row(i), &centroids[k]))));
-            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
 
             // Pick nearest valid cluster.
             let mut assigned = false;
@@ -658,6 +658,29 @@ mod tests {
 
         assert_eq!(labels[0], labels[1]);
         assert_ne!(labels[0], labels[2]);
+    }
+
+    #[test]
+    fn nan_distances_from_custom_metric_do_not_panic() {
+        // Finite data can still yield NaN through a user metric. Sorting the
+        // candidate clusters must not panic (Rust >= 1.81 sorts may panic on
+        // an inconsistent comparator).
+        #[derive(Clone)]
+        struct NanPast5;
+        impl DistanceMetric for NanPast5 {
+            fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+                if a[0] > 5.0 || b[0] > 5.0 {
+                    f32::NAN
+                } else {
+                    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+                }
+            }
+        }
+
+        let data: Vec<Vec<f32>> = (0..40).map(|i| vec![i as f32 * 0.25, 1.0]).collect();
+        let _ = CopKmeans::with_metric(25, NanPast5)
+            .with_seed(3)
+            .fit_predict_constrained(&data, &[Constraint::CannotLink(0, 39)]);
     }
 
     /// Early contradiction detection: contradictory must-link + cannot-link
