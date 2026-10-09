@@ -10,6 +10,7 @@ homepage = "https://github.com/arclabs561/clump"
 documentation = "https://docs.rs/clump"
 keywords = ["clustering", "kmeans", "dbscan", "hdbscan", "ml"]
 categories = ["algorithms", "science"]
+include = ["/src/**/*.rs", "/examples/**/*.rs", "/tests/**/*.rs", "/tests/fixtures/**/*.json", "/benches/**/*.rs", "/Cargo.toml", "/CHANGELOG.md", "/LICENSE", "/LICENSE-*", "/README.md"]
 
 [workspace]
 
