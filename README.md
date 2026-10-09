@@ -75,10 +75,13 @@ let labels = Kmeans::new(2).with_seed(42).fit_predict(&data).unwrap();
 ```rust
 use clump::MiniBatchKmeans;
 
+let batch1 = vec![vec![0.0, 0.0], vec![5.0, 5.0], vec![10.0, 10.0]];
+let batch2 = vec![vec![0.1, 0.1], vec![5.1, 5.1], vec![10.1, 10.1]];
+
 let mut mbk = MiniBatchKmeans::new(3).with_seed(42);
 mbk.update_batch(&batch1).unwrap();
 mbk.update_batch(&batch2).unwrap();
-// Centroids available via mbk.centroids()
+assert_eq!(mbk.centroids().len(), 3);
 ```
 
 ## Constrained clustering
@@ -86,6 +89,12 @@ mbk.update_batch(&batch2).unwrap();
 ```rust
 use clump::{CopKmeans, Constraint};
 
+let data = vec![
+    vec![0.0, 0.0],
+    vec![0.1, 0.1],
+    vec![10.0, 10.0],
+    vec![10.1, 10.1],
+];
 let constraints = vec![
     Constraint::MustLink(0, 1),
     Constraint::CannotLink(0, 2),

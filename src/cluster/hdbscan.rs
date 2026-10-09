@@ -7,7 +7,11 @@
 //! # Algorithm Outline
 //!
 //! 1. **Core distance**: For each point, compute the distance to its k-th nearest
-//!    neighbor (where k = `min_samples`). This estimates local density.
+//!    neighbor (where k = `min_samples`). This estimates local density. The
+//!    point itself is not counted, which matches McInnes's `hdbscan` library.
+//!    scikit-learn's `HDBSCAN` counts the point (as does `min_pts` in clump's
+//!    `Dbscan`), so `min_samples = m` here corresponds to `min_samples = m + 1`
+//!    in scikit-learn.
 //!
 //! 2. **Mutual reachability distance**: For each pair (i, j):
 //!    `mrd(i, j) = max(core_dist[i], core_dist[j], dist(i, j))`.
@@ -100,7 +104,8 @@ impl<D: DistanceMetric> Hdbscan<D> {
         }
     }
 
-    /// Set `min_samples` (k for core distance computation).
+    /// Set `min_samples` (k for core distance computation, excluding the
+    /// point itself; see the module docs for the convention).
     pub fn with_min_samples(mut self, min_samples: usize) -> Self {
         self.min_samples = min_samples;
         self
