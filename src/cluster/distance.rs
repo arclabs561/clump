@@ -29,6 +29,16 @@ pub trait DistanceMetric: Clone + Send + Sync {
         None
     }
 
+    /// Whether `distance` already returns a squared quantity (D^2).
+    ///
+    /// k-means++ seeding samples proportional to `D^alpha`. A metric that is
+    /// already squared needs exponent `alpha / 2`; a plain metric such as
+    /// [`Euclidean`] needs `alpha`. Defaults to `true`, matching the metrics
+    /// seeded before this hook existed.
+    fn distance_is_squared(&self) -> bool {
+        true
+    }
+
     /// Whether centroids should be L2-normalized after each update step.
     ///
     /// For cosine-based k-means, the correct centroid is the L2-normalized
@@ -72,6 +82,10 @@ impl DistanceMetric for SquaredEuclidean {
 pub struct Euclidean;
 
 impl DistanceMetric for Euclidean {
+    fn distance_is_squared(&self) -> bool {
+        false
+    }
+
     #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         SquaredEuclidean.distance(a, b).sqrt()

@@ -158,9 +158,14 @@ pub(crate) fn kmeanspp_init<D: DistanceMetric>(
     // Uses MAX as initial value, so the helper's `if d < *md` always fires.
     update_min_dists_for_centroid(data, &centroids[0], &mut min_dists, metric);
 
-    // Precompute the exponent once. For the common case alpha=2.0,
-    // the exponent is 1.0 and powf is a no-op -- use distances directly.
-    let exp = alpha / 2.0;
+    // Precompute the exponent once. For squared metrics at alpha=2.0 the
+    // exponent is 1.0 and powf is a no-op -- use distances directly. A
+    // non-squared metric (Euclidean) needs the full alpha to sample D^alpha.
+    let exp = if metric.distance_is_squared() {
+        alpha / 2.0
+    } else {
+        alpha
+    };
     let identity_exp = (exp - 1.0).abs() < f32::EPSILON;
 
     // Remaining centroids: k-means++ selection.
@@ -791,6 +796,29 @@ mod tests {
         // All centroids should be from the dataset.
         for c in &centroids {
             assert!(data.contains(c), "centroid {:?} not in dataset", c);
+        }
+    }
+
+    #[test]
+    fn kmeanspp_euclidean_seeds_like_squared_euclidean() {
+        // Arthur & Vassilvitskii 2007 sample proportional to D(x)^2. With the
+        // non-squared Euclidean metric the weights must still be D^2, so the
+        // same RNG stream must pick the same seeds as SquaredEuclidean.
+        let data: Vec<Vec<f32>> = (0..40)
+            .map(|i| {
+                let t = i as f32;
+                vec![
+                    (t * 7.3).sin() * (1.0 + t),
+                    (t * 3.1).cos() * (1.0 + t * 0.5),
+                ]
+            })
+            .collect();
+        for seed in 0..20u64 {
+            let mut r1 = StdRng::seed_from_u64(seed);
+            let mut r2 = StdRng::seed_from_u64(seed);
+            let sq = kmeanspp_init(&data, 5, &SquaredEuclidean, 2.0, &mut r1);
+            let eu = kmeanspp_init(&data, 5, &Euclidean, 2.0, &mut r2);
+            assert_eq!(sq, eu, "seed {seed}");
         }
     }
 
