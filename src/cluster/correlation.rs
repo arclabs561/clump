@@ -336,10 +336,11 @@ impl CorrelationClustering {
                 }
             }
 
-            // Find the best merge.
+            // Find the best merge. Equal deltas are broken by cluster pair so
+            // the choice does not depend on HashMap iteration order.
             let best = pair_deltas
                 .iter()
-                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
+                .min_by(|a, b| a.1.total_cmp(b.1).then_with(|| a.0.cmp(b.0)));
 
             match best {
                 Some((&(from, to), &delta)) if delta < 0.0 => {
@@ -537,10 +538,13 @@ fn contract_graph(
         *pair_weights.entry(key).or_insert(0.0) += edge.weight;
     }
 
-    let contracted_edges: Vec<SignedEdge> = pair_weights
+    let mut contracted_edges: Vec<SignedEdge> = pair_weights
         .into_iter()
         .map(|((i, j), weight)| SignedEdge { i, j, weight })
         .collect();
+    // Adjacency order decides ties in local search; keep it independent of
+    // HashMap iteration order.
+    contracted_edges.sort_unstable_by_key(|e| (e.i, e.j));
 
     (n_contracted, contracted_edges)
 }
@@ -813,6 +817,95 @@ mod tests {
             "same seed should produce identical results"
         );
         assert!((r1.cost - r2.cost).abs() < 1e-12);
+    }
+
+    #[test]
+    fn seeded_fit_is_reproducible_with_tied_weights() {
+        // Unit weights create many equal merge deltas and move gains, so the
+        // result depends on tie-breaking. With a fixed seed every fit must
+        // agree; HashMap iteration order differs per map instance and must
+        // not leak into the answer.
+        // 10% noise lets preclustering contract the graph (the contracted
+        // edge list is built from a HashMap); 30% noise leaves it intact and
+        // exercises the merge pass.
+        let n = 60;
+        for noise_tenths in [1u64, 3] {
+            let mut state = 0x2545_F491_4F6C_DD1Du64;
+            let mut edges = Vec::new();
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    let planted = i % 8 == j % 8;
+                    let flip = (state >> 33) % 10 < noise_tenths;
+                    let weight = if planted != flip { 1.0 } else { -1.0 };
+                    edges.push(SignedEdge { i, j, weight });
+                }
+            }
+
+            let first = CorrelationClustering::new()
+                .with_seed(7)
+                .fit(n, &edges)
+                .unwrap();
+            for run in 0..200 {
+                let r = CorrelationClustering::new()
+                    .with_seed(7)
+                    .fit(n, &edges)
+                    .unwrap();
+                assert_eq!(
+                    r.labels, first.labels,
+                    "noise {noise_tenths}/10, run {run}: labels differ"
+                );
+                assert_eq!(r.cost, first.cost, "noise {noise_tenths}/10, run {run}");
+            }
+        }
+    }
+
+    #[test]
+    fn merge_pass_breaks_equal_deltas_by_cluster_pair() {
+        // Merging {0,1} or {1,2} gains the same 1.0, and after either merge
+        // the other no longer pays. The tie must go to the smaller cluster
+        // pair every time, not to whichever pair HashMap iteration yields.
+        let edges = [
+            SignedEdge {
+                i: 0,
+                j: 1,
+                weight: 1.0,
+            },
+            SignedEdge {
+                i: 1,
+                j: 2,
+                weight: 1.0,
+            },
+            SignedEdge {
+                i: 0,
+                j: 2,
+                weight: -1.5,
+            },
+        ];
+        let adj = CorrelationClustering::build_adj(3, &edges);
+        for _ in 0..50 {
+            let mut labels = vec![0, 1, 2];
+            CorrelationClustering::merge_pass(3, &adj, &mut labels);
+            assert_eq!(labels, vec![1, 1, 2]);
+        }
+    }
+
+    #[test]
+    fn contracted_edges_come_out_in_endpoint_order() {
+        // Adjacency order decides local-search ties, so the contracted edge
+        // list must not inherit HashMap iteration order.
+        let edges: Vec<SignedEdge> = (0..6)
+            .flat_map(|i| ((i + 1)..6).map(move |j| SignedEdge { i, j, weight: 1.0 }))
+            .collect();
+        let mapping = [0, 0, 1, 1, 2, 2];
+        for _ in 0..20 {
+            let (n, contracted) = contract_graph(6, &edges, &mapping);
+            assert_eq!(n, 3);
+            let keys: Vec<(usize, usize)> = contracted.iter().map(|e| (e.i, e.j)).collect();
+            assert_eq!(keys, vec![(0, 1), (0, 2), (1, 2)]);
+        }
     }
 
     #[test]
