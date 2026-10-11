@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791569006532,
+  "lastUpdate": 1791687602390,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -6897,6 +6897,142 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 152537,
             "range": "± 271",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "attobop@gmail.com",
+            "name": "Henry Wallace"
+          },
+          "committer": {
+            "email": "attobop@gmail.com",
+            "name": "Henry Wallace"
+          },
+          "distinct": true,
+          "id": "f2a710d7b106f9f1f6b761ee31bd69eed1c6b1ce",
+          "message": "clump: compute the blas assignment with ndarray instead of raw sgemm\n\nblas_assign called matrixmultiply::sgemm through raw pointers inside unsafe. ndarray's general_mat_mul is a safe wrapper over the same matrixmultiply kernel, so the blas feature now depends on ndarray (already optional) instead of matrixmultiply, and the crate forbids unsafe code unless gpu (Metal buffer reads) is enabled.\n\nChecked: fmt; clippy -D warnings for the CI feature set, blas alone, and defaults; cargo test with parallel,simd,serde,ndarray,blas (429 pass, including both blas_assign-vs-direct tests); docs -D warnings.",
+          "timestamp": "2026-10-10T20:36:55-06:00",
+          "tree_id": "874764ce584c20ca54f09ceaa2876869974b457a",
+          "url": "https://github.com/arclabs561/clump/commit/f2a710d7b106f9f1f6b761ee31bd69eed1c6b1ce"
+        },
+        "date": 1791687600962,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 1257973,
+            "range": "± 15544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 6444775,
+            "range": "± 19170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 102251443,
+            "range": "± 377667",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 14176567,
+            "range": "± 59639",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 65488703,
+            "range": "± 1260899",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 510486018,
+            "range": "± 1192145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 1019133257,
+            "range": "± 2942116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 71039159,
+            "range": "± 229171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 7216366552,
+            "range": "± 27064709",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 5252863,
+            "range": "± 15710",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 21157758,
+            "range": "± 134997",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 541687272,
+            "range": "± 1208776",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 549695794,
+            "range": "± 4632297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1224901579,
+            "range": "± 5403274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2693318,
+            "range": "± 36407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 10383576,
+            "range": "± 20062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 41124820,
+            "range": "± 262603",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 251992225,
+            "range": "± 980981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 144762,
+            "range": "± 581",
             "unit": "ns/iter"
           }
         ]
