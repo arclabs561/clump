@@ -38,7 +38,7 @@ blas = ["dep:ndarray"]
 hopfield = ["dep:hopfield"]
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 proptest = "1.9"
 linfa = "0.8.1"
 linfa-clustering = "0.8.1"
