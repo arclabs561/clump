@@ -397,8 +397,7 @@ pub(crate) fn hamerly_assign<D: DistanceMetric>(
 
     let batch_dist = |point: &[f32], centroid_idx: usize| -> f32 {
         let centroid = if use_flat {
-            let c = &flat_centroids[centroid_idx * dim..(centroid_idx + 1) * dim];
-            c
+            &flat_centroids[centroid_idx * dim..(centroid_idx + 1) * dim]
         } else {
             &centroids[centroid_idx]
         };
