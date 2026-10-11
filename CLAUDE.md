@@ -58,7 +58,7 @@ src/cluster/
 | `gpu` | metal | Metal compute shader for k-means assignment (n*k >= 500k) |
 | `serde` | serde | Serialize/Deserialize on KmeansFit, SignedEdge, etc. |
 | `ndarray` | ndarray | array2_to_vecs, flat_to_vecs conversion helpers |
-| `blas` | matrixmultiply | SGEMM for the first k-means assignment pass |
+| `blas` | ndarray | SGEMM (ndarray `general_mat_mul` over matrixmultiply) for the first k-means assignment pass |
 
 ## Precision
 

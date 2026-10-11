@@ -16,8 +16,8 @@
 //! [`NOISE`] (`usize::MAX`).
 
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(any(feature = "gpu", feature = "blas")), forbid(unsafe_code))]
-#![cfg_attr(any(feature = "gpu", feature = "blas"), deny(unsafe_code))]
+#![cfg_attr(not(feature = "gpu"), forbid(unsafe_code))]
+#![cfg_attr(feature = "gpu", deny(unsafe_code))]
 #![warn(missing_docs)]
 
 /// CLAM: Clustering with Associative Memory helpers (requires `hopfield` feature).

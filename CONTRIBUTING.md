@@ -32,7 +32,7 @@ cargo test --all-features
 
 ## Feature flags
 
-`Cargo.toml` defines `gpu` (Metal-only, macOS), `parallel` (rayon), `simd` (innr), `blas` (matrixmultiply), `ndarray`, `serde`, `hopfield` (CLAM module). The `gpu` feature is gated to `target_os = "macos"` so `--all-features` works on Linux CI.
+`Cargo.toml` defines `gpu` (Metal-only, macOS), `parallel` (rayon), `simd` (innr), `blas` (SGEMM through ndarray), `ndarray`, `serde`, `hopfield` (CLAM module). The `gpu` feature is gated to `target_os = "macos"` so `--all-features` works on Linux CI.
 
 ## Pull requests
 

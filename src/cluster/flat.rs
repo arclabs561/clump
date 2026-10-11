@@ -218,13 +218,12 @@ impl FlatMatrix {
         (labels, upper)
     }
 
-    /// BLAS GEMM-based assignment using matrixmultiply crate.
+    /// BLAS GEMM-based assignment using ndarray's `general_mat_mul`.
     ///
     /// Computes X @ C^T via optimized SGEMM, then finds argmin per row.
     /// This is the FAISS/scikit-learn approach: 2-5x faster than per-point
     /// distance loops for large k due to micro-kernel SIMD optimization.
     #[cfg(feature = "blas")]
-    #[allow(unsafe_code)]
     pub(crate) fn blas_assign(
         &self,
         centroids: &FlatMatrix,
@@ -235,26 +234,17 @@ impl FlatMatrix {
         let k = centroids.n();
         let d = self.d;
 
-        // Compute X @ C^T (n x k matrix) via SGEMM.
-        let mut xct = vec![0.0f32; n * k];
-        unsafe {
-            matrixmultiply::sgemm(
-                n,   // m
-                d,   // k (inner dimension)
-                k,   // n (output columns)
-                1.0, // alpha
-                self.data.as_ptr(),
-                d as isize, // row stride of X
-                1,          // col stride of X
-                centroids.data.as_ptr(),
-                1,          // row stride of C^T (feature axis)
-                d as isize, // col stride of C^T (centroid axis)
-                0.0,        // beta
-                xct.as_mut_ptr(),
-                k as isize, // row stride of output
-                1,          // col stride of output
-            );
-        }
+        // Compute X @ C^T (n x k matrix) via SGEMM. ndarray's general_mat_mul
+        // is a safe wrapper over the same matrixmultiply kernel.
+        let x = ndarray::ArrayView2::from_shape((n, d), &self.data)
+            .expect("FlatMatrix data is n * d row-major");
+        let c = ndarray::ArrayView2::from_shape((k, d), &centroids.data)
+            .expect("FlatMatrix data is n * d row-major");
+        let mut xct_mat = ndarray::Array2::<f32>::zeros((n, k));
+        ndarray::linalg::general_mat_mul(1.0, &x, &c.t(), 0.0, &mut xct_mat);
+        let xct = xct_mat
+            .as_slice()
+            .expect("a freshly allocated Array2 is contiguous row-major");
 
         // Compute ||x-c||^2 = ||x||^2 + ||c||^2 - 2*x.c and find argmin.
         let mut labels = vec![0usize; n];

@@ -132,7 +132,7 @@ Built-in metrics are `SquaredEuclidean`, `Euclidean`, `CosineDistance`,
 
 Optional features: `parallel` (Rayon), `gpu` (Metal k-means on macOS), `serde`,
 `ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance), `blas`
-(matrixmultiply), and `hopfield` (associative-memory helpers).
+(SGEMM through ndarray), and `hopfield` (associative-memory helpers).
 
 ## Examples
 
