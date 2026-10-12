@@ -389,7 +389,13 @@ impl<D: DistanceMetric> Kmeans<D> {
                     for j in 0..d {
                         new_centroids[k][j] = (sums_f64[k][j] / divisor) as f32;
                     }
-                } else {
+                }
+            }
+
+            // Finish every occupied mean before an empty cluster reads one:
+            // the largest cluster may have a higher index than the empty one.
+            for k in 0..self.k {
+                if counts[k] == 0 {
                     // Empty cluster: split the largest cluster by moving the
                     // farthest point from its centroid. More stable than random
                     // reinitialization, which can cause oscillation (Hamerly 2010).
@@ -788,6 +794,26 @@ mod tests {
         assert_eq!(fit.centroids.len(), 4);
         // All points assigned.
         assert_eq!(fit.labels.len(), 6);
+    }
+
+    #[test]
+    fn empty_cluster_reseed_uses_updated_mean_in_either_cluster_order() {
+        let data = vec![vec![-100.0], vec![-99.0], vec![-80.0]];
+        // All points initially belong to the centroid at -90. Its updated
+        // mean is -93, so -80 is the farthest member, regardless of cluster ID.
+        for empty in 0..2 {
+            let mut initial = vec![vec![-90.0]; 2];
+            initial[empty] = vec![1000.0];
+            let fit = Kmeans::new(2)
+                .with_centroids(initial)
+                .with_max_iter(1)
+                .fit(&data)
+                .unwrap();
+            assert_eq!(fit.centroids[empty], vec![-80.0]);
+            assert_eq!(fit.centroids[1 - empty], vec![-93.0]);
+            let expected = vec![1 - empty, 1 - empty, empty];
+            assert_eq!(fit.labels, expected);
+        }
     }
 
     /// d >> n: high-dimensional data with few points.
