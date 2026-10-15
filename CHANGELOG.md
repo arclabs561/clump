@@ -1,5 +1,12 @@
 # Changelog
 
+## Source history (unversioned)
+
+These entries identify source changes without assigning a package release.
+
+- Compute occupied cluster means before selecting replacement centroids for empty k-means clusters.
+  ([f7a3b29](https://github.com/arclabs561/clump/commit/f7a3b2963e07b02aaa8fba1f09d44f4392548e42))
+
 ## [Unreleased]
 
 ## [0.6.0] - 2026-10-09
