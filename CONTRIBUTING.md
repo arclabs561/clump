@@ -1,7 +1,5 @@
 # Contributing to clump
 
-Thanks for your interest. clump is a clustering library covering K-means, DBSCAN, HDBSCAN, OPTICS, EVoC, DenStream, COP-Kmeans, and correlation clustering.
-
 ## Before you start
 
 For non-trivial work (new algorithms, API changes, large refactors), open an issue first to align on scope. Drive-by bug fixes and doc patches don't need an issue.

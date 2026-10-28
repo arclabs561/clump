@@ -5,29 +5,12 @@
 
 Clustering algorithms.
 
-`clump` includes centroid, density, streaming, constrained, hierarchical, and
-graph-based clustering over vector or edge-list inputs.
+## Overview
 
-```rust
-use clump::Dbscan;
-
-let data = vec![vec![0.0, 0.0], vec![0.1, 0.1], vec![10.0, 10.0]];
-let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
-```
-
-## Algorithms
-
-| Algorithm | Kind | Discovers k | Noise handling | Batch input |
-|-----------|------|-------------|----------------|-------------|
-| K-means | Centroid | No (k required) | None | `DataRef` |
-| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `DataRef` |
-| DBSCAN | Density | Yes | `NOISE` sentinel | `DataRef` |
-| HDBSCAN | Density (hierarchical) | Yes | `NOISE` sentinel | `DataRef` |
-| DenStream | Density (streaming) | Yes | Decaying outlier micro-clusters | `DataRef` |
-| EVoC | Hierarchical | Yes | `None` outside retained components | `DataRef` |
-| COP-Kmeans | Constrained centroid | No (k required) | None | `DataRef` + constraints |
-| OPTICS | Density (reachability) | Yes | `NOISE` when extracting clusters | `DataRef` |
-| Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
+Group vectors into clusters or partition a graph from signed edges. The
+quickstart compares k-means, where you choose the number of clusters, with
+DBSCAN, which finds clusters from density and labels isolated points as noise.
+See the [examples](examples/README.md) for streaming and constrained clustering.
 
 ## Quickstart
 
@@ -53,9 +36,27 @@ assert_ne!(labels[0], labels[2]);
 
 // DBSCAN: discovers clusters from density (default: Euclidean)
 let labels = Dbscan::new(0.5, 2).fit_predict(&data).unwrap();
+assert_eq!(labels[0], labels[1]);
+assert_eq!(&labels[2..], &[clump::NOISE, clump::NOISE]);
 ```
 
-`Kmeans::fit` returns `KmeansFit` with centroids, which supports `predict` on new points. `Dbscan::fit_predict` assigns noise points to `clump::NOISE`; use `fit_predict_with_noise` for `Option` labels.
+`Kmeans::fit` returns a `KmeansFit` containing the centroids; call its `predict`
+method to label new points. `Dbscan::fit_predict` assigns noise points to
+`clump::NOISE`. Use `fit_predict_with_noise` to get `Option` labels instead.
+
+## Algorithms
+
+| Algorithm | Kind | Discovers k | Noise handling | Batch input |
+|-----------|------|-------------|----------------|-------------|
+| K-means | Centroid | No (k required) | None | `DataRef` |
+| Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `DataRef` |
+| DBSCAN | Density | Yes | `NOISE` sentinel | `DataRef` |
+| HDBSCAN | Density (hierarchical) | Yes | `NOISE` sentinel | `DataRef` |
+| DenStream | Density (streaming) | Yes | Decaying outlier micro-clusters | `DataRef` |
+| EVoC | Hierarchical | Yes | `None` outside retained components | `DataRef` |
+| COP-Kmeans | Constrained centroid | No (k required) | None | `DataRef` + constraints |
+| OPTICS | Density (reachability) | Yes | `NOISE` when extracting clusters | `DataRef` |
+| Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
 
 ## Zero-copy flat input
 
@@ -122,17 +123,25 @@ Also see `edges_from_distances` to build signed edges from a distance matrix.
 
 ## Distance metrics
 
-The vector-input algorithms that expose `with_metric` are generic over
-`DistanceMetric`; correlation clustering instead consumes weighted edges.
+For vector algorithms that expose `with_metric`, use it to choose a
+`DistanceMetric`. Correlation clustering uses weighted edges instead.
 Built-in metrics are `SquaredEuclidean`, `Euclidean`, `CosineDistance`,
 `InnerProductDistance`, and `CompositeDistance`. Custom metrics implement
 `DistanceMetric` (`fn distance(&self, a: &[f32], b: &[f32]) -> f32`).
 
 ## Features
 
-Optional features: `parallel` (Rayon), `gpu` (Metal k-means on macOS), `serde`,
-`ndarray` (Array2 conversions), `simd` (NEON/AVX2/AVX-512 distance), `blas`
-(SGEMM through ndarray), and `hopfield` (associative-memory helpers).
+No optional features are enabled by default.
+
+| Feature | Enables |
+|---|---|
+| `parallel` | Parallel computation with Rayon |
+| `gpu` | K-means assignment with Metal on macOS |
+| `serde` | Serialization support |
+| `ndarray` | Conversions from `Array2` |
+| `simd` | Hardware-accelerated distance calculations through `innr` |
+| `blas` | SGEMM through ndarray |
+| `hopfield` | Clustering with associative memory (CLAM) helpers |
 
 ## Examples
 

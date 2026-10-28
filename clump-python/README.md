@@ -1,6 +1,6 @@
 # clumppy
 
-Clustering algorithms (k-means, DBSCAN, HDBSCAN, COP-Kmeans, correlation clustering) with evaluation metrics, backed by a Rust implementation.
+Cluster vectors and partition graphs using signed edges.
 
 Python bindings for the [clump](https://crates.io/crates/clump) Rust crate.
 
@@ -52,9 +52,11 @@ score = clumppy.silhouette_score(data, labels)
 | `calinski_harabasz_score` | Variance ratio criterion (higher = better) |
 | `davies_bouldin_score` | Cluster similarity index (lower = better) |
 
-## numpy support
+## NumPy support
 
-All functions accept numpy arrays or Python lists. Labels are returned as numpy int64 arrays; centroids as numpy float64 arrays.
+Functions that take point data accept two-dimensional NumPy arrays or lists of
+lists. Labels are returned as NumPy `int64` arrays; centroids as NumPy `float64`
+arrays. Correlation clustering takes a list of `(i, j, weight)` edge tuples.
 
 ## License
 

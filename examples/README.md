@@ -5,7 +5,7 @@ script when the data is absent.
 
 ## Getting started
 
-### `quickstart` — what does clustering with clump look like end to end?
+### `quickstart`
 
 Generates a mixed 2D dataset (two blobs plus an outlier), runs k-means and
 DBSCAN, and predicts the cluster of new points.
@@ -28,10 +28,10 @@ Noise points: 1
 Outlier label: NOISE
 ```
 
-### `clustering` — how do k-means and DBSCAN label the same points?
+### `clustering`
 
 Prints the per-point cluster assignment for k-means, DBSCAN, and HDBSCAN on a
-small three-blob dataset, so you can see where the algorithms agree and differ.
+small three-blob dataset, so you can compare their assignments.
 
 ```bash
 cargo run --release --example clustering
@@ -49,7 +49,7 @@ cargo run --release --example clustering
   ...
 ```
 
-### `flat_input` — what input layouts does clump accept?
+### `flat_input`
 
 The same k-means call over a flat `&[f32]` slice, a `Vec<Vec<f32>>`, and (with
 `--features ndarray`) an `ndarray` matrix, showing all paths produce identical
@@ -74,7 +74,7 @@ ndarray path skipped (enable with --features ndarray)
 
 ## Choosing and evaluating
 
-### `evaluation` — how do I choose k and judge cluster quality?
+### `evaluation`
 
 Sweeps `k` and reports WCSS, silhouette, Calinski-Harabasz, and Davies-Bouldin
 so the trade-offs are visible, then scores a DBSCAN run with DISCO (which also
@@ -105,7 +105,7 @@ DISCO evaluates both cluster quality and noise assignment correctness.
 
 ## Streaming
 
-### `streaming` — can I cluster a stream without holding all the data?
+### `streaming`
 
 Feeds points in batches to MiniBatchKmeans and DenStream, showing centroids and
 micro-clusters update online.
@@ -129,10 +129,10 @@ Predict: (0.5,0.5)->mc 0, (50.5,50.5)->mc 1
 
 ## Real data
 
-### `mnist_kmeans_ari` — does k-means recover real structure on MNIST?
+### `mnist_kmeans_ari`
 
-Runs k-means on the 10000-image MNIST test split and scores the clusters against
-the true digit labels (ARI / NMI / purity), plus an internal silhouette.
+Runs k-means on MNIST's 10,000 test images, then compares the clusters with the
+digit labels using ARI, NMI and purity. Also reports the silhouette score.
 
 Data-gated: needs the MNIST test split (`data/` is gitignored). Fetch it first:
 
