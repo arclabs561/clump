@@ -9,6 +9,14 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Kmeans` now stops when the summed squared centroid shift falls below
+  `tol` times the mean per-dimension variance, as scikit-learn does. It
+  multiplied that threshold by `k`, so it could stop early: on a 10-cluster
+  fixture it stopped after 12 iterations with inertia 147.1, where
+  scikit-learn's Lloyd run from the same centres takes 25 and reaches 110.0.
+
 ## [0.6.0] - 2026-10-09
 
 ### Changed

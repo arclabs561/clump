@@ -308,7 +308,7 @@ impl<D: DistanceMetric> Kmeans<D> {
         // Without this, the raw tol is compared against the sum of k*d squared
         // centroid shifts, which becomes meaninglessly tight for high-dimensional
         // or large-scale data. (Matches scikit-learn's _tolerance approach.)
-        let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
+        let effective_tol = (self.tol * util::mean_variance(data)) as f32;
 
         // Initialize RNG.
         let mut rng = match self.seed {
