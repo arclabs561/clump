@@ -14,6 +14,18 @@ These entries identify source changes without assigning a package release.
 - `DistanceMetric::euclidean_radius` (default `None`). It returns a Euclidean
   radius bounding a neighborhood under the metric; `Euclidean` and
   `SquaredEuclidean` implement it.
+- `Optics::extract_xi_with(result, xi, min_samples, min_cluster_size)`: Xi
+  cluster extraction with the steep-area algorithm of Ankerst et al. (1999),
+  ported from scikit-learn's `cluster_optics_xi` without predecessor
+  correction (`OpticsResult` has no predecessors).
+
+### Changed
+
+- `Optics::extract_xi` is now `extract_xi_with(result, xi, 5, 5)`, the
+  scikit-learn `OPTICS` defaults. Labels change for most inputs, `xi` now
+  has scikit-learn's meaning (smaller values accept shallower valleys and
+  find more clusters), and `xi` outside `(0, 1)` panics. Behaviour change
+  for callers of `extract_xi`; the signature is unchanged.
 
 ### Fixed
 
@@ -36,6 +48,11 @@ These entries identify source changes without assigning a package release.
 - `clam::am_contract` and `clam_loss` stepped along `beta` times the
   documented energy gradient, so large `beta` overshot and diverged (a point
   contracted to [12.1, 12.1] at `beta = 25`, `lr = 0.1`).
+- `Optics::extract_xi` compared each point only with its predecessor, so the
+  first point of every cluster was noise and a single steep step inside a
+  valley split it. On three separated blobs at `xi = 0.3` scikit-learn finds
+  the three clusters with no noise; the old code labelled the first point of
+  the ordering noise.
 
 ## [0.6.1] - 2026-10-30
 

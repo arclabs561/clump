@@ -1,9 +1,16 @@
-//! Regression tests for DBSCAN with non-Euclidean metrics at large n,
-//! weighted correlation clustering, DenStream, CLAM, and the README's default
-//! k-means settings.
+//! Regression tests for DBSCAN with non-Euclidean metrics at large n, OPTICS
+//! xi extraction, weighted correlation clustering, DenStream, CLAM, and the
+//! README's default k-means settings.
+
+mod fx {
+    #![allow(dead_code, clippy::excessive_precision)]
+    include!("fixtures/sklearn_optics/fixture.rs");
+}
 
 use clump::cluster::correlation::{CorrelationClustering, SignedEdge};
-use clump::{CosineDistance, Dbscan, DenStream, Kmeans, NOISE};
+use clump::cluster::metrics::adjusted_rand_index;
+use clump::cluster::{Optics, OpticsResult};
+use clump::{CosineDistance, Dbscan, DenStream, Euclidean, Kmeans, NOISE};
 
 // ------------------------------------------------------------------ DBSCAN
 
@@ -40,6 +47,115 @@ fn dbscan_cosine_large_n_finds_same_neighbors_as_small_n() {
         .fit_predict(&small)
         .unwrap();
     assert!(sl.iter().all(|&l| l != NOISE));
+}
+
+// ------------------------------------------------------------------ OPTICS
+
+fn optics_x() -> Vec<Vec<f32>> {
+    fx::X.iter().map(|r| r.to_vec()).collect()
+}
+
+/// On three well-separated blobs with xi = 0.3, scikit-learn's
+/// `cluster_optics_xi` finds the three true clusters with no noise. The first
+/// point of each cluster must not be labelled noise.
+#[test]
+fn optics_xi_keeps_first_point_of_each_cluster() {
+    let r = Optics::new(f32::INFINITY, 5).fit(&optics_x()).unwrap();
+    let labels = Optics::<Euclidean>::extract_xi(&r, 0.3);
+    let noise = labels.iter().filter(|&&l| l == NOISE).count();
+    let truth: Vec<usize> = fx::TRUE_LABELS.iter().map(|&v| v as usize).collect();
+    let mapped: Vec<usize> = labels
+        .iter()
+        .map(|&l| if l == NOISE { usize::MAX - 1 } else { l })
+        .collect();
+    let ari = adjusted_rand_index(&truth, &mapped);
+    let first = r.ordering[0];
+    assert_ne!(labels[first], NOISE, "first point of the ordering is noise");
+    assert_eq!(noise, 0, "expected 0 noise and ARI 1.0, got ari={ari:.4}");
+}
+
+/// A single xi-steep upward step inside a valley (0.10 -> 0.12, xi = 0.1)
+/// must not end the cluster. scikit-learn (min_samples=2,
+/// min_cluster_size=3, xi=0.1) labels positions 0..=6 as one cluster.
+#[test]
+fn optics_xi_small_bump_does_not_split_a_valley() {
+    let inf = f32::INFINITY;
+    let reach = vec![inf, 1.0, 0.10, 0.12, 0.10, 0.11, 0.10, 1.0];
+    let n = reach.len();
+    let result = OpticsResult {
+        ordering: (0..n).collect(),
+        reachability: reach,
+        core_distances: vec![0.05; n],
+    };
+    let labels = Optics::<Euclidean>::extract_xi(&result, 0.1);
+    let first = labels[0];
+    assert!(
+        labels[..=6].iter().all(|&l| l == first && l != NOISE),
+        "valley 0..=6 split or partly noise: {labels:?}"
+    );
+
+    // The parameters scikit-learn used for the expectation above.
+    let labels = Optics::<Euclidean>::extract_xi_with(&result, 0.1, 2, 3);
+    let first = labels[0];
+    assert!(
+        labels[..=6].iter().all(|&l| l == first && l != NOISE),
+        "valley 0..=6 split or partly noise: {labels:?}"
+    );
+}
+
+/// A steep down area nested inside a wider one, both closed by the same steep
+/// up area: the inner valley is labelled first and the outer cluster, which
+/// would overlap it, is dropped. scikit-learn (xi=0.1, min_samples=2,
+/// min_cluster_size=3) finds clusters [4, 9] and [0, 9] and labels only
+/// positions 4..=9.
+#[test]
+fn optics_xi_labels_the_inner_of_two_nested_clusters() {
+    let reach = vec![f32::INFINITY, 4.0, 4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0, 8.0];
+    let n = reach.len();
+    let result = OpticsResult {
+        ordering: (0..n).collect(),
+        reachability: reach,
+        core_distances: vec![1.0; n],
+    };
+    let labels = Optics::<Euclidean>::extract_xi_with(&result, 0.1, 2, 3);
+    let mut expected = vec![NOISE; 4];
+    expected.extend([0; 6]);
+    assert_eq!(labels, expected);
+}
+
+/// On scikit-learn's own reachability plot (150 points, min_samples = 5),
+/// `extract_xi_with` reproduces scikit-learn's xi = 0.05 labels exactly,
+/// including the cluster numbering and the 46 noise points.
+#[test]
+fn optics_xi_matches_sklearn_labels_on_its_reachability_plot() {
+    let n = fx::SK_ORDERING.len();
+    let core_by_point: Vec<f32> = fx::SK_CORE.iter().map(|&v| v as f32).collect();
+    let result = OpticsResult {
+        ordering: fx::SK_ORDERING.to_vec(),
+        reachability: fx::SK_REACH.iter().map(|&v| v as f32).collect(),
+        core_distances: fx::SK_ORDERING.iter().map(|&i| core_by_point[i]).collect(),
+    };
+    let labels = Optics::<Euclidean>::extract_xi_with(&result, 0.05, 5, 5);
+    let expected: Vec<usize> = fx::SK_XI_LABELS_NO_PREDECESSOR
+        .iter()
+        .map(|&v| if v < 0 { NOISE } else { v as usize })
+        .collect();
+    assert_eq!(labels.len(), n);
+    assert_eq!(labels, expected);
+    assert_eq!(labels.iter().filter(|&&l| l == NOISE).count(), 46);
+    // The wrapper's defaults are min_samples = min_cluster_size = 5.
+    assert_eq!(Optics::<Euclidean>::extract_xi(&result, 0.05), expected);
+}
+
+#[test]
+#[should_panic(expected = "xi must be in (0, 1)")]
+fn optics_xi_rejects_xi_of_one() {
+    let result = OpticsResult {
+        ordering: vec![0],
+        reachability: vec![f32::INFINITY],
+        core_distances: vec![f32::INFINITY],
+    };
+    Optics::<Euclidean>::extract_xi(&result, 1.0);
 }
 
 // ------------------------------------------------------------- correlation

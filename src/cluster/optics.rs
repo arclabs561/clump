@@ -239,96 +239,93 @@ impl<D: DistanceMetric> Optics<D> {
         }
     }
 
-    /// Extract clusters using the Xi method (Ankerst et al. 1999).
+    /// Extract clusters using the Xi method with default parameters.
     ///
-    /// Detects significant valleys (steep-down followed by steep-up) in the
-    /// reachability plot. A point is "steep down" if its reachability drops
-    /// by a factor >= (1 - xi) relative to its predecessor. A "steep up"
-    /// is the reverse. Clusters are the regions between steep-down and
-    /// steep-up transitions.
+    /// Equivalent to [`extract_xi_with`](Self::extract_xi_with)`(result, xi,
+    /// 5, 5)`. The defaults match scikit-learn's `OPTICS` (`min_samples=5`,
+    /// `min_cluster_size=None`, which falls back to `min_samples`).
+    /// [`OpticsResult`] does not record the `min_pts` it was fitted with, so
+    /// when the fit used a different `min_pts`, call
+    /// [`extract_xi_with`](Self::extract_xi_with) and pass it as
+    /// `min_samples`.
     ///
-    /// `xi` in (0, 1): smaller values require deeper valleys (fewer, tighter
-    /// clusters). Typical values: 0.01-0.1.
+    /// # Panics
     ///
-    /// Returns labels where noise is `NOISE` (`usize::MAX`).
+    /// Panics if `xi` is not in `(0, 1)`.
     pub fn extract_xi(result: &OpticsResult, xi: f32) -> Vec<usize> {
-        let n = result.ordering.len();
+        Self::extract_xi_with(
+            result,
+            xi,
+            XI_DEFAULT_MIN_SAMPLES,
+            XI_DEFAULT_MIN_CLUSTER_SIZE,
+        )
+    }
+
+    /// Extract clusters using the Xi method (Ankerst et al. 1999, section
+    /// 4.3).
+    ///
+    /// A position in the reachability plot is xi-steep downward when the next
+    /// reachability is at most `1 - xi` times the current one, and xi-steep
+    /// upward in the reverse direction. Maximal steep down and steep up areas
+    /// are paired into candidate clusters (Definition 11 of the paper), and
+    /// clusters are labelled smallest first: a point keeps the label of the
+    /// first (innermost) cluster that claims it, and a larger cluster is only
+    /// labelled when none of its points already has a label. Points in no
+    /// labelled cluster are `NOISE`.
+    ///
+    /// This is a port of scikit-learn's `cluster_optics_xi` with
+    /// `predecessor_correction=False`; [`OpticsResult`] does not store OPTICS
+    /// predecessors, so the predecessor correction of Schubert and Gertz
+    /// (2018) is not applied.
+    ///
+    /// - `xi` in `(0, 1)`: minimum relative steepness of a cluster boundary.
+    ///   Smaller values accept shallower valleys and find more clusters.
+    /// - `min_samples`: the `min_pts` used for the fit. A steep area may
+    ///   contain at most this many consecutive non-steep points.
+    /// - `min_cluster_size`: minimum number of points in a cluster.
+    ///
+    /// Returns labels indexed by original point, with `NOISE` (`usize::MAX`)
+    /// for unclustered points.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `xi` is not in `(0, 1)`, or if `min_samples` or
+    /// `min_cluster_size` is less than 2.
+    pub fn extract_xi_with(
+        result: &OpticsResult,
+        xi: f32,
+        min_samples: usize,
+        min_cluster_size: usize,
+    ) -> Vec<usize> {
+        assert!(xi > 0.0 && xi < 1.0, "xi must be in (0, 1)");
+        assert!(min_samples >= 2, "min_samples must be at least 2");
+        assert!(min_cluster_size >= 2, "min_cluster_size must be at least 2");
+
         let noise = crate::NOISE;
-        if n == 0 {
-            return vec![];
-        }
+        let n = result.ordering.len();
+        let clusters = xi_clusters(
+            &result.reachability,
+            f64::from(xi),
+            min_samples,
+            min_cluster_size,
+        );
 
-        let reach = &result.reachability;
-        let factor = 1.0 - xi;
-
-        // Compute a smoothed "max reachability so far" to detect valley
-        // boundaries. A valley starts when reachability drops significantly
-        // below the preceding maximum, and ends when it rises back.
-
-        // For each position, compute the local maximum reachability in a
-        // window looking backward (the "ridge" before the valley).
-        let mut max_before = vec![0.0f32; n];
-        let mut running_max = 0.0f32;
-        for p in 0..n {
-            if reach[p].is_infinite() {
-                // Reset at cluster boundaries so each valley is independent.
-                running_max = 0.0;
-            } else if reach[p] > running_max {
-                running_max = reach[p];
-            }
-            max_before[p] = running_max;
-        }
-
-        // A point is "in a valley" if its reachability is < factor * max_before.
-        // Contiguous valley regions become clusters.
-        // Detect valleys using predecessor comparison.
-        // A point enters a valley when reach[p] < reach[p-1] * factor (steep drop).
-        // A point leaves a valley when reach[p] > reach[p-1] / factor (steep rise).
-        // Between those transitions, points belong to the current cluster.
+        // Clusters come innermost first, so a cluster is labelled only when
+        // none of its positions is already taken.
         let mut label_by_pos = vec![noise; n];
-        let mut cluster_id = 0usize;
-        let mut in_valley = false;
-
-        for p in 1..n {
-            let prev = reach[p - 1];
-            let curr = reach[p];
-
-            if curr.is_infinite() {
-                in_valley = false;
-                continue;
-            }
-
-            if prev.is_infinite() {
-                // Transition from inf to finite: entering a cluster region.
-                in_valley = true;
-                cluster_id += 1;
-                label_by_pos[p] = cluster_id - 1;
-                continue;
-            }
-
-            // Steep down: current << previous.
-            if curr < prev * factor && !in_valley {
-                in_valley = true;
-                cluster_id += 1;
-                label_by_pos[p] = cluster_id - 1;
-            }
-            // Steep up: current >> previous.
-            else if curr > prev / factor && in_valley {
-                in_valley = false;
-                // This point is the ridge, not part of the valley.
-            }
-            // Continuation of current state.
-            else if in_valley {
-                label_by_pos[p] = cluster_id - 1;
+        let mut label = 0usize;
+        for &(start, end) in &clusters {
+            let span = &mut label_by_pos[start..=end];
+            if span.iter().all(|&l| l == noise) {
+                span.fill(label);
+                label += 1;
             }
         }
 
-        // Map back to original point indices.
         let mut label_by_orig = vec![noise; n];
         for (pos, &orig_idx) in result.ordering.iter().enumerate() {
             label_by_orig[orig_idx] = label_by_pos[pos];
         }
-
         label_by_orig
     }
 
@@ -356,6 +353,150 @@ impl<D: DistanceMetric> Optics<D> {
         }
 
         label_by_orig
+    }
+}
+
+/// Default `min_samples` for [`Optics::extract_xi`] (scikit-learn's `OPTICS`
+/// default).
+const XI_DEFAULT_MIN_SAMPLES: usize = 5;
+/// Default `min_cluster_size` for [`Optics::extract_xi`] (scikit-learn falls
+/// back to `min_samples`).
+const XI_DEFAULT_MIN_CLUSTER_SIZE: usize = XI_DEFAULT_MIN_SAMPLES;
+
+// The Xi extraction below is ported from scikit-learn 1.7.2,
+// sklearn/cluster/_optics.py (`_xi_cluster`, `_extend_region`,
+// `_update_filter_sdas`, `_extract_xi_labels`), BSD-3-Clause, copyright the
+// scikit-learn developers; the license text is in
+// licenses/scikit-learn-BSD-3-Clause.txt. Indices refer to positions in the reachability
+// plot. The predecessor correction (`_correct_predecessor`) is omitted
+// because `OpticsResult` has no predecessors.
+
+/// A steep down area: `start..=end` with its maximum-in-between value.
+struct SteepDownArea {
+    start: usize,
+    end: usize,
+    mib: f64,
+}
+
+/// Candidate clusters as inclusive `(start, end)` plot positions, nested
+/// clusters before the clusters that contain them.
+fn xi_clusters(
+    reachability: &[f32],
+    xi: f64,
+    min_samples: usize,
+    min_cluster_size: usize,
+) -> Vec<(usize, usize)> {
+    let n = reachability.len();
+    // A trailing infinity closes a cluster that runs to the end of the plot.
+    let mut r: Vec<f64> = reachability.iter().map(|&v| f64::from(v)).collect();
+    r.push(f64::INFINITY);
+
+    let xi_complement = 1.0 - xi;
+    // ratio[i] = r[i] / r[i + 1]; inf / inf is NaN and fails every test below.
+    let ratio: Vec<f64> = (0..n).map(|i| r[i] / r[i + 1]).collect();
+    let steep_upward: Vec<bool> = ratio.iter().map(|&q| q <= xi_complement).collect();
+    let steep_downward: Vec<bool> = ratio.iter().map(|&q| q >= 1.0 / xi_complement).collect();
+    let downward: Vec<bool> = ratio.iter().map(|&q| q > 1.0).collect();
+    let upward: Vec<bool> = ratio.iter().map(|&q| q < 1.0).collect();
+
+    let mut sdas: Vec<SteepDownArea> = Vec::new();
+    let mut clusters = Vec::new();
+    let mut index = 0usize;
+    let mut mib = 0.0f64;
+
+    for steep_index in 0..n {
+        if !(steep_upward[steep_index] || steep_downward[steep_index]) || steep_index < index {
+            continue;
+        }
+
+        mib = r[index..=steep_index].iter().fold(mib, |m, &v| m.max(v));
+
+        if steep_downward[steep_index] {
+            update_filter_sdas(&mut sdas, mib, xi_complement, &r);
+            let d_end = extend_region(&steep_downward, &upward, steep_index, min_samples);
+            sdas.push(SteepDownArea {
+                start: steep_index,
+                end: d_end,
+                mib: 0.0,
+            });
+            index = d_end + 1;
+            mib = r[index];
+        } else {
+            update_filter_sdas(&mut sdas, mib, xi_complement, &r);
+            let u_start = steep_index;
+            let u_end = extend_region(&steep_upward, &downward, u_start, min_samples);
+            index = u_end + 1;
+            mib = r[index];
+
+            let mut u_clusters = Vec::new();
+            for d in &sdas {
+                let mut c_start = d.start;
+                let mut c_end = u_end;
+
+                // Line (**) of the paper's Figure 19, condition sc2*.
+                if r[c_end + 1] * xi_complement < d.mib {
+                    continue;
+                }
+
+                // Definition 11, criterion 4.
+                let d_max = r[d.start];
+                if d_max * xi_complement >= r[c_end + 1] {
+                    while r[c_start + 1] > r[c_end + 1] && c_start < d.end {
+                        c_start += 1;
+                    }
+                } else if r[c_end + 1] * xi_complement >= d_max {
+                    while c_end > u_start && r[c_end - 1] > d_max {
+                        c_end -= 1;
+                    }
+                }
+
+                // Definition 11, criteria 3a, 1 and 2.
+                if c_end + 1 < c_start + min_cluster_size || c_start > d.end || c_end < u_start {
+                    continue;
+                }
+                u_clusters.push((c_start, c_end));
+            }
+
+            u_clusters.reverse();
+            clusters.extend(u_clusters);
+        }
+    }
+
+    clusters
+}
+
+/// Extend a steep area from `start` until it is maximal, allowing at most
+/// `min_samples` consecutive points that are neither steep nor reversing.
+/// Returns the last steep position of the area.
+fn extend_region(steep: &[bool], xward: &[bool], start: usize, min_samples: usize) -> usize {
+    let mut non_xward_points = 0usize;
+    let mut end = start;
+    for index in start..steep.len() {
+        if steep[index] {
+            non_xward_points = 0;
+            end = index;
+        } else if !xward[index] {
+            non_xward_points += 1;
+            if non_xward_points > min_samples {
+                break;
+            }
+        } else {
+            return end;
+        }
+    }
+    end
+}
+
+/// Drop steep down areas whose start is not xi-steep above `mib`, and raise
+/// the maximum-in-between of the rest.
+fn update_filter_sdas(sdas: &mut Vec<SteepDownArea>, mib: f64, xi_complement: f64, r: &[f64]) {
+    if mib.is_infinite() {
+        sdas.clear();
+        return;
+    }
+    sdas.retain(|sda| mib <= r[sda.start] * xi_complement);
+    for sda in sdas.iter_mut() {
+        sda.mib = sda.mib.max(mib);
     }
 }
 
