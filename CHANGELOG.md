@@ -9,6 +9,8 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-30
+
 ### Fixed
 
 - `Kmeans` now stops when the summed squared centroid shift falls below
