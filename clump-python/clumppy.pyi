@@ -277,7 +277,9 @@ class OpticsResult:
         """Extract clusters using the Xi method (automatic valley detection).
 
         Args:
-            xi: Steepness parameter in (0, 1). Smaller = fewer, tighter clusters.
+            xi: Minimum relative steepness of a cluster boundary, in (0, 1).
+                Smaller values accept shallower valleys. Uses min_samples =
+                min_cluster_size = 5 (scikit-learn defaults).
 
         Returns:
             Cluster labels as int64 array. Noise = -1.
