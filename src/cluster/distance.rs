@@ -47,6 +47,17 @@ pub trait DistanceMetric: Clone + Send + Sync {
     fn normalize_centroids(&self) -> bool {
         false
     }
+
+    /// A Euclidean radius that contains every point within `radius` of a
+    /// query under this metric, or `None` if there is no such bound.
+    ///
+    /// Spatial indexes (DBSCAN's grid and random-projection indexes) prune
+    /// candidates by coordinate or projected distance, which is only valid
+    /// when the metric bounds Euclidean distance. Metrics returning `None`
+    /// (the default, and e.g. [`CosineDistance`]) fall back to an exact scan.
+    fn euclidean_radius(&self, _radius: f32) -> Option<f32> {
+        None
+    }
 }
 
 /// Squared Euclidean distance: `sum((a_i - b_i)^2)`.
@@ -75,6 +86,10 @@ impl DistanceMetric for SquaredEuclidean {
     fn hamerly_distance(&self, a: &[f32], b: &[f32]) -> Option<f32> {
         Some(self.distance(a, b).max(0.0).sqrt())
     }
+
+    fn euclidean_radius(&self, radius: f32) -> Option<f32> {
+        Some(radius.max(0.0).sqrt())
+    }
 }
 
 /// Euclidean (L2) distance: `sqrt(sum((a_i - b_i)^2))`.
@@ -93,6 +108,10 @@ impl DistanceMetric for Euclidean {
 
     fn hamerly_distance(&self, a: &[f32], b: &[f32]) -> Option<f32> {
         Some(self.distance(a, b))
+    }
+
+    fn euclidean_radius(&self, radius: f32) -> Option<f32> {
+        Some(radius)
     }
 }
 

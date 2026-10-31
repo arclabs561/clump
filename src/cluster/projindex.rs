@@ -80,8 +80,16 @@ impl<'a, T: DataRef + ?Sized, D: DistanceMetric> ProjIndex<'a, T, D> {
         }
     }
 
-    /// Find all points within `radius` of `query`.
-    pub(crate) fn range_query(&self, query: &[f32], radius: f32) -> Vec<usize> {
+    /// Find all points within `radius` of `query` under the index's metric.
+    ///
+    /// `euclidean_radius` must bound the Euclidean distance of every point
+    /// within `radius`; it sets the projection filter width.
+    pub(crate) fn range_query(
+        &self,
+        query: &[f32],
+        euclidean_radius: f32,
+        radius: f32,
+    ) -> Vec<usize> {
         if self.sorted_projs.is_empty() {
             return Vec::new();
         }
@@ -92,8 +100,8 @@ impl<'a, T: DataRef + ?Sized, D: DistanceMetric> ProjIndex<'a, T, D> {
 
         for (axis_idx, axis) in self.axes.iter().enumerate() {
             let proj_q: f32 = query.iter().zip(axis.iter()).map(|(&x, &a)| x * a).sum();
-            let lo = proj_q - radius;
-            let hi = proj_q + radius;
+            let lo = proj_q - euclidean_radius;
+            let hi = proj_q + euclidean_radius;
             let sorted = &self.sorted_projs[axis_idx];
             let start = sorted.partition_point(|&(v, _)| v < lo);
             let end = sorted.partition_point(|&(v, _)| v <= hi);
@@ -126,7 +134,7 @@ mod tests {
             vec![10.1, 10.1],
         ];
         let index = ProjIndex::new(data.as_slice(), &Euclidean, 8);
-        let mut results = index.range_query(&[0.0, 0.0], 0.5);
+        let mut results = index.range_query(&[0.0, 0.0], 0.5, 0.5);
         results.sort();
         assert!(results.contains(&0));
         assert!(results.contains(&1));
@@ -137,7 +145,7 @@ mod tests {
     fn empty_data() {
         let data: Vec<Vec<f32>> = vec![];
         let index = ProjIndex::new(data.as_slice(), &Euclidean, 8);
-        assert!(index.range_query(&[0.0], 1.0).is_empty());
+        assert!(index.range_query(&[0.0], 1.0, 1.0).is_empty());
     }
 
     #[test]
@@ -155,7 +163,7 @@ mod tests {
             .collect();
         brute.sort();
 
-        let mut indexed = index.range_query(query, radius);
+        let mut indexed = index.range_query(query, radius, radius);
         indexed.sort();
 
         for &b in &brute {

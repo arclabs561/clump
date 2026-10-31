@@ -156,7 +156,9 @@ impl CorrelationClustering {
     /// arXiv 2404.05433). Vertex pairs with a positive edge and Jaccard
     /// similarity >= 0.5 over their positive neighborhoods are merged
     /// before the main algorithm runs, reducing the effective graph size
-    /// and giving local search a better starting point.
+    /// and giving local search a better starting point. The overlap test
+    /// ignores weights, so a final local search on the original graph may
+    /// split contracted vertices again.
     ///
     /// Returns [`Error::InvalidParameter`] if any edge references an item index
     /// `>= n_items`.
@@ -228,6 +230,13 @@ impl CorrelationClustering {
         let mut labels = vec![0usize; n_items];
         for i in 0..n_items {
             labels[i] = contracted_labels[mapping[i]];
+        }
+
+        // Preclustering ignores edge weights, so a contraction can glue
+        // vertices that a weighted optimum separates. Refine on the original
+        // graph so the contraction is only a starting point.
+        if self.max_iter > 0 {
+            self.local_search(n_items, &adj, &mut labels);
         }
 
         // Evaluate cost on ORIGINAL edges.
