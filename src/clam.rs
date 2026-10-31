@@ -94,7 +94,8 @@ pub fn am_soft_assign(data: &[Vec<f64>], centroids: &[Vec<f64>], beta: f64) -> V
 
 /// Contract a point toward centroids using AM energy descent.
 ///
-/// Uses the Log-Sum-Exp (LSE) energy from [`hopfield`]: gradient descent on
+/// Uses the Log-Sum-Exp (LSE) energy with [`hopfield`]'s retrieval loop:
+/// gradient descent on
 /// `E_β(v; Ξ) = -(1/β) log Σ_μ exp(-β/2 ||v - ξ^μ||²)` converges toward the
 /// nearest centroid attractor.
 ///
@@ -127,12 +128,32 @@ pub fn am_contract(
     let (contracted, _) = hopfield::retrieve_memory(
         point.to_vec(),
         centroids,
-        |v, m| hopfield::energy_lse_grad(v, m, beta),
+        |v, m| energy_grad(v, m, beta),
         lr,
         steps,
         1e-10,
     );
     contracted
+}
+
+/// Gradient of `E_β(v; Ξ) = -(1/β) log Σ_μ exp(-β/2 ||v - ξ^μ||²)`:
+/// `Σ_μ softmax_μ (v - ξ^μ)` (Saha et al. 2023, Eq. 4).
+///
+/// `hopfield::energy_lse_grad` returns `β` times this (the gradient of the
+/// energy without the `1/β` factor), which makes a fixed step size overshoot
+/// for large `β`.
+fn energy_grad(v: &[f64], centroids: &[Vec<f64>], beta: f64) -> Vec<f64> {
+    let mut grad = vec![0.0; v.len()];
+    if centroids.is_empty() {
+        return grad;
+    }
+    let weights = am_soft_assign(&[v.to_vec()], centroids, beta).remove(0);
+    for (w, c) in weights.iter().zip(centroids) {
+        for ((g, vi), ci) in grad.iter_mut().zip(v).zip(c) {
+            *g += w * (vi - ci);
+        }
+    }
+    grad
 }
 
 /// Differentiable clustering loss (CLAM loss).

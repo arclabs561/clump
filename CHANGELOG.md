@@ -9,6 +9,34 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+### Added
+
+- `DistanceMetric::euclidean_radius` (default `None`). It returns a Euclidean
+  radius bounding a neighborhood under the metric; `Euclidean` and
+  `SquaredEuclidean` implement it.
+
+### Fixed
+
+- `Dbscan` above 16,384 points used a grid or random-projection index that
+  assumes Euclidean distance, so with `CosineDistance` every point could
+  become noise. Metrics without a Euclidean bound now take an exact scan,
+  and `SquaredEuclidean` sizes the grid by the square root of `epsilon`.
+- `CorrelationClustering::fit` preclusters by unweighted neighborhood
+  overlap, which could glue vertices that a weighted optimum separates (cost
+  101 against an optimum of 2.01 on a four-vertex graph). It now refines the
+  expanded labels with local search on the original graph.
+- DenStream initialization made each DBSCAN cluster of the buffer one
+  micro-cluster, so a 50-unit line gave one micro-cluster of radius 14 with
+  `epsilon = 1` and in-distribution points were noise. It now builds one
+  potential micro-cluster per dense `epsilon`-neighborhood (Cao et al. 2006,
+  section 4.1).
+- DenStream computed micro-cluster radii from raw f32 sums, so shifting a
+  stream by 1e4 turned one micro-cluster into 37. Micro-clusters now keep a
+  weighted mean and squared deviations in f64.
+- `clam::am_contract` and `clam_loss` stepped along `beta` times the
+  documented energy gradient, so large `beta` overshot and diverged (a point
+  contracted to [12.1, 12.1] at `beta = 25`, `lr = 0.1`).
+
 ## [0.6.1] - 2026-10-30
 
 ### Fixed

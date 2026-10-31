@@ -182,12 +182,12 @@ impl<D: DistanceMetric> Dbscan<D> {
         label == NOISE
     }
 
-    /// Build a grid-based spatial index with cell size = epsilon.
+    /// Build a grid-based spatial index with the given cell size, which must
+    /// be a Euclidean bound on the neighborhood radius.
     /// Points in the same or adjacent cells are neighbor candidates.
     /// Reduces region_query from O(n) to O(neighbors) amortized for
     /// well-distributed data.
-    fn build_grid(data: &(impl DataRef + ?Sized), epsilon: f32) -> HashMap<Vec<i64>, Vec<usize>> {
-        let cell_size = epsilon;
+    fn build_grid(data: &(impl DataRef + ?Sized), cell_size: f32) -> HashMap<Vec<i64>, Vec<usize>> {
         let mut grid: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
         for i in 0..data.n() {
             let cell: Vec<i64> = data
@@ -206,10 +206,10 @@ impl<D: DistanceMetric> Dbscan<D> {
         data: &(impl DataRef + ?Sized),
         point_idx: usize,
         grid: &HashMap<Vec<i64>, Vec<usize>>,
+        cell_size: f32,
     ) -> Vec<usize> {
         let point = data.row(point_idx);
         let d = point.len();
-        let cell_size = self.epsilon;
         let center_cell: Vec<i64> = point
             .iter()
             .map(|&x| (x / cell_size).floor() as i64)
@@ -264,6 +264,7 @@ impl<D: DistanceMetric> Dbscan<D> {
         cluster_id: i32,
         visited: &mut [bool],
         grid: &HashMap<Vec<i64>, Vec<usize>>,
+        cell_size: f32,
     ) {
         labels[point_idx] = cluster_id;
         let mut to_process: Vec<usize> = neighbors.to_vec();
@@ -277,7 +278,7 @@ impl<D: DistanceMetric> Dbscan<D> {
             }
             visited[neighbor_idx] = true;
 
-            let neighbor_neighbors = self.region_query_grid(data, neighbor_idx, grid);
+            let neighbor_neighbors = self.region_query_grid(data, neighbor_idx, grid, cell_size);
             if neighbor_neighbors.len() + 1 >= self.min_pts {
                 for nn in neighbor_neighbors {
                     if !visited[nn] {
@@ -386,7 +387,14 @@ impl<D: DistanceMetric> Dbscan<D> {
         let use_precomputed = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
         // Grid index: O(3^d) adjacent cells per query. Fast for d<=5 (243 cells).
         // VP-tree: O(log n) queries, metric-agnostic. Better for moderate d.
-        let use_grid = !use_precomputed && d <= 5;
+        // Both spatial indexes prune by Euclidean geometry, so they need a
+        // Euclidean bound on the neighborhood; other metrics (cosine, inner
+        // product) take the exact scan.
+        let euclidean_radius = self
+            .metric
+            .euclidean_radius(self.epsilon)
+            .filter(|r| r.is_finite() && *r > 0.0);
+        let use_grid = !use_precomputed && d <= 5 && euclidean_radius.is_some();
 
         if use_precomputed {
             let dists = util::pairwise_distance_matrix(data, &self.metric);
@@ -417,7 +425,8 @@ impl<D: DistanceMetric> Dbscan<D> {
             }
         } else if use_grid {
             // Low-d large dataset: grid spatial index (O(3^d) cells per query).
-            let grid = Self::build_grid(data, self.epsilon);
+            let cell_size = euclidean_radius.unwrap_or(self.epsilon);
+            let grid = Self::build_grid(data, cell_size);
 
             for point_idx in 0..n {
                 if visited[point_idx] {
@@ -425,7 +434,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                 }
                 visited[point_idx] = true;
 
-                let neighbors = self.region_query_grid(data, point_idx, &grid);
+                let neighbors = self.region_query_grid(data, point_idx, &grid, cell_size);
 
                 if neighbors.len() + 1 < self.min_pts {
                     labels[point_idx] = NOISE_LABEL;
@@ -440,6 +449,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                     cluster_id,
                     &mut visited,
                     &grid,
+                    cell_size,
                 );
                 cluster_id += 1;
             }
@@ -449,7 +459,19 @@ impl<D: DistanceMetric> Dbscan<D> {
             // By Cauchy-Schwarz, each projection is a valid filter for range
             // queries. O(n * k) build, O(k * log n + candidates * d) per query.
             // More effective than VP-tree in d > 10 (avoids curse of dimensionality).
-            let proj = ProjIndex::new(data, &self.metric, 12);
+            // Without a Euclidean bound, each query is an exact O(n) scan.
+            let proj = euclidean_radius.map(|r| (ProjIndex::new(data, &self.metric, 12), r));
+            let range_query = |idx: usize| -> Vec<usize> {
+                let q = data.row(idx);
+                let mut out = match &proj {
+                    Some((index, r)) => index.range_query(q, *r, self.epsilon),
+                    None => (0..n)
+                        .filter(|&j| self.metric.distance(q, data.row(j)) <= self.epsilon)
+                        .collect(),
+                };
+                out.retain(|&j| j != idx);
+                out
+            };
 
             for point_idx in 0..n {
                 if visited[point_idx] {
@@ -457,8 +479,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                 }
                 visited[point_idx] = true;
 
-                let mut neighbors = proj.range_query(data.row(point_idx), self.epsilon);
-                neighbors.retain(|&j| j != point_idx);
+                let neighbors = range_query(point_idx);
 
                 if neighbors.len() + 1 < self.min_pts {
                     labels[point_idx] = NOISE_LABEL;
@@ -478,8 +499,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                     }
                     visited[neighbor_idx] = true;
 
-                    let mut nn = proj.range_query(data.row(neighbor_idx), self.epsilon);
-                    nn.retain(|&j| j != neighbor_idx);
+                    let nn = range_query(neighbor_idx);
                     if nn.len() + 1 >= self.min_pts {
                         for idx in nn {
                             if !visited[idx] {

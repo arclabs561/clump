@@ -11,7 +11,8 @@
 //!   promoted to potential. Periodic pruning removes stale micro-clusters.
 //!
 //! - **Initialization**: buffers the first 1,000 points without decay, then
-//!   applies DBSCAN with `epsilon` and `beta * mu` as the density threshold.
+//!   turns each `epsilon`-neighborhood of weight at least `beta * mu` into a
+//!   potential micro-cluster, so every initial radius is at most `epsilon`.
 //! - **Offline phase** (on demand): connects dense potential micro-clusters
 //!   whose centers and radii overlap. Border micro-clusters join a neighboring
 //!   core but do not expand it.
@@ -19,11 +20,13 @@
 //! ## Micro-Cluster Summary
 //!
 //! Each micro-cluster is a CF-like (Clustering Feature) structure that tracks:
-//! - Linear sum and squared sum of absorbed points (for centroid and radius)
+//! - Weighted mean and weighted squared deviations of absorbed points (for
+//!   centroid and radius; the centred form of the linear and squared sums)
 //! - Decayed weight (recency-aware)
 //! - Creation and last-update timestamps
 //!
-//! The centroid is `ls / n` and the radius is `sqrt(ss/n - (ls/n)^2)`.
+//! The centroid is `ls / w` and the radius is `sqrt(ss/w - (ls/w)^2)`, computed
+//! from the centred sums so the result does not depend on a common offset.
 //!
 //! ## Parameters
 //!
@@ -57,16 +60,21 @@ use crate::error::{Error, Result};
 
 /// A micro-cluster summary (CF-like structure).
 ///
-/// Tracks the linear sum, squared sum, weight, and timestamps of absorbed
-/// points. The centroid and radius are derived quantities.
+/// Tracks the decay-weighted mean, the weighted sum of squared deviations
+/// from it, the weight, and timestamps of absorbed points. This is the
+/// linear-sum/squared-sum CF of Cao et al. in centred form: the radius
+/// `sqrt(ss/w - (ls/w)^2)` computed from raw sums cancels catastrophically
+/// when points share a large offset, while the centred form does not depend
+/// on where the data sits.
 #[derive(Debug, Clone)]
 struct MicroCluster {
     /// Number of absorbed points.
     n: usize,
-    /// Linear sum of points (centroid = ls / n).
-    ls: Vec<f32>,
-    /// Squared sum of points (for radius computation).
-    ss: Vec<f32>,
+    /// Decay-weighted mean of absorbed points (`ls / w`).
+    mean: Vec<f64>,
+    /// Decay-weighted sum of squared deviations from `mean`, per dimension
+    /// (`ss - ls^2 / w`).
+    m2: Vec<f64>,
     /// Decayed weight (accounts for recency).
     weight: f64,
     /// Timestamp when the micro-cluster was created.
@@ -75,19 +83,38 @@ struct MicroCluster {
     last_update: u64,
 }
 
+/// Add a point with weight 1 to centred CF sums (West 1979 weighted update).
+fn add_point(weight: &mut f64, mean: &mut [f64], m2: &mut [f64], point: &[f32]) {
+    *weight += 1.0;
+    let w = *weight;
+    for ((&p, mu), m) in point.iter().zip(mean.iter_mut()).zip(m2.iter_mut()) {
+        let p = p as f64;
+        let delta = p - *mu;
+        *mu += delta / w;
+        *m += delta * (p - *mu);
+    }
+}
+
+/// Radius `sqrt(sum(m2) / w)`, clamped to 0.
+fn radius_of(weight: f64, m2: &[f64]) -> f32 {
+    if weight <= 0.0 {
+        return 0.0;
+    }
+    let sum: f64 = m2.iter().sum();
+    (sum / weight).max(0.0).sqrt() as f32
+}
+
 impl MicroCluster {
     fn from_points(points: &[Vec<f32>], timestamp: u64) -> Self {
         let mut cluster = Self::new(&points[0], timestamp);
         for point in &points[1..] {
             cluster.n += 1;
-            cluster.weight += 1.0;
-            for (&value, (ls, ss)) in point
-                .iter()
-                .zip(cluster.ls.iter_mut().zip(cluster.ss.iter_mut()))
-            {
-                *ls += value;
-                *ss += value * value;
-            }
+            add_point(
+                &mut cluster.weight,
+                &mut cluster.mean,
+                &mut cluster.m2,
+                point,
+            );
         }
         cluster
     }
@@ -96,12 +123,10 @@ impl MicroCluster {
 impl MicroCluster {
     /// Create a new micro-cluster from a single point.
     fn new(point: &[f32], timestamp: u64) -> Self {
-        let ls = point.to_vec();
-        let ss: Vec<f32> = point.iter().map(|&x| x * x).collect();
         Self {
             n: 1,
-            ls,
-            ss,
+            mean: point.iter().map(|&x| x as f64).collect(),
+            m2: vec![0.0; point.len()],
             weight: 1.0,
             creation_time: timestamp,
             last_update: timestamp,
@@ -110,17 +135,13 @@ impl MicroCluster {
 
     /// Compute the centroid (decay-weighted mean of absorbed points).
     fn centroid(&self) -> Vec<f32> {
-        let w = self.weight as f32;
-        if w <= 0.0 {
-            return self.ls.clone(); // degenerate: return raw sums
-        }
-        self.ls.iter().map(|&x| x / w).collect()
+        self.mean.iter().map(|&x| x as f32).collect()
     }
 
     /// Compute the radius: `sqrt(ss/w - (ls/w)^2)`, clamped to 0.
     #[allow(dead_code)]
     fn radius(&self) -> f32 {
-        self.radius_from(self.weight as f32, &self.ls, &self.ss)
+        radius_of(self.weight, &self.m2)
     }
 
     /// Compute the radius that would result from absorbing an additional point,
@@ -128,43 +149,27 @@ impl MicroCluster {
     fn radius_if_absorbed(&self, point: &[f32], decay_factor: f64, timestamp: u64) -> f32 {
         let mut decayed = self.clone();
         decayed.apply_decay(decay_factor, timestamp);
-        let new_w = decayed.weight as f32 + 1.0;
-        let new_ls: Vec<f32> = decayed.ls.iter().zip(point).map(|(&l, &p)| l + p).collect();
-        let new_ss: Vec<f32> = decayed
-            .ss
-            .iter()
-            .zip(point)
-            .map(|(&s, &p)| s + p * p)
-            .collect();
-        self.radius_from(new_w, &new_ls, &new_ss)
-    }
-
-    /// Shared radius computation from arbitrary CF sums.
-    fn radius_from(&self, w: f32, ls: &[f32], ss: &[f32]) -> f32 {
-        if w <= 0.0 {
-            return 0.0;
-        }
-        let mut sum = 0.0f32;
-        for (&l, &s) in ls.iter().zip(ss) {
-            let mean = l / w;
-            let var = s / w - mean * mean;
-            sum += var;
-        }
-        sum.max(0.0).sqrt()
+        add_point(
+            &mut decayed.weight,
+            &mut decayed.mean,
+            &mut decayed.m2,
+            point,
+        );
+        radius_of(decayed.weight, &decayed.m2)
     }
 
     /// Apply time decay to all CF components.
+    ///
+    /// Decay scales `ls`, `ss` and `w` alike, so the mean is unchanged and
+    /// the squared deviations scale with the weight.
     fn apply_decay(&mut self, decay_factor: f64, timestamp: u64) {
         let elapsed = timestamp.saturating_sub(self.last_update);
         if elapsed > 0 {
             // Base-2 decay to match the outlier threshold formula (Cao et al. 2006).
             let decay = 2.0_f64.powf(-decay_factor * elapsed as f64) as f32;
             self.weight *= decay as f64;
-            for l in &mut self.ls {
-                *l *= decay;
-            }
-            for s in &mut self.ss {
-                *s *= decay;
+            for m in &mut self.m2 {
+                *m *= decay as f64;
             }
             self.last_update = timestamp;
         }
@@ -177,11 +182,7 @@ impl MicroCluster {
 
         // Add the point.
         self.n += 1;
-        self.weight += 1.0;
-        for (&p, (l, s)) in point.iter().zip(self.ls.iter_mut().zip(self.ss.iter_mut())) {
-            *l += p;
-            *s += p * p;
-        }
+        add_point(&mut self.weight, &mut self.mean, &mut self.m2, point);
         self.last_update = timestamp;
     }
 
@@ -477,24 +478,32 @@ impl<D: DistanceMetric> DenStream<D> {
             .fit_predict(&centroids)
     }
 
+    /// Initialization phase (Cao et al. 2006, section 4.1): scan the buffer
+    /// and, for each unused point whose epsilon-neighborhood among unused
+    /// points has weight at least `beta * mu`, make that neighborhood one
+    /// potential micro-cluster. Each micro-cluster's radius is therefore at
+    /// most epsilon, as in the online phase. Remaining points are dropped.
     fn initialize_from_buffer(&mut self) -> Result<()> {
-        let min_weight = (self.beta * self.mu).ceil() as usize;
-        let labels = Dbscan::new(self.epsilon, min_weight).fit_predict(&self.initial_buffer)?;
-        let n_clusters = labels
-            .iter()
-            .copied()
-            .filter(|&label| label != NOISE)
-            .max()
-            .map_or(0, |label| label + 1);
-        for label in 0..n_clusters {
-            let points: Vec<Vec<f32>> = self
-                .initial_buffer
-                .iter()
-                .zip(&labels)
-                .filter(|(_, &point_label)| point_label == label)
-                .map(|(point, _)| point.clone())
+        let n = self.initial_buffer.len();
+        let mut used = vec![false; n];
+        for i in 0..n {
+            if used[i] {
+                continue;
+            }
+            let center = &self.initial_buffer[i];
+            let members: Vec<usize> = (0..n)
+                .filter(|&j| {
+                    !used[j] && Euclidean.distance(center, &self.initial_buffer[j]) <= self.epsilon
+                })
                 .collect();
-            if points.len() as f64 >= self.beta * self.mu {
+            if members.len() as f64 >= self.beta * self.mu {
+                let points: Vec<Vec<f32>> = members
+                    .iter()
+                    .map(|&j| self.initial_buffer[j].clone())
+                    .collect();
+                for &j in &members {
+                    used[j] = true;
+                }
                 self.p_micro_clusters
                     .push(MicroCluster::from_points(&points, self.timestamp));
             }
@@ -539,13 +548,8 @@ impl<D: DistanceMetric> DenStream<D> {
         let mut centroid_buf = vec![0.0f32; d];
 
         for (i, mc) in clusters.iter().enumerate() {
-            let w = mc.weight as f32;
-            if w > 0.0 {
-                for (j, &x) in mc.ls.iter().enumerate() {
-                    centroid_buf[j] = x / w;
-                }
-            } else {
-                centroid_buf[..d].copy_from_slice(&mc.ls[..d]);
+            for (c, &x) in centroid_buf.iter_mut().zip(&mc.mean) {
+                *c = x as f32;
             }
             let dist = self.metric.distance(point, &centroid_buf);
             if dist < best_dist {
