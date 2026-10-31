@@ -390,7 +390,7 @@ impl<D: DistanceMetric> CopKmeans<D> {
         let mut counts = vec![0usize; self.k];
         let mut sums_f64 = vec![vec![0.0f64; d]; self.k];
         let mut order: Vec<usize> = (0..n).collect();
-        let effective_tol = (self.tol * util::mean_variance(data) * self.k as f64) as f32;
+        let effective_tol = (self.tol * util::mean_variance(data)) as f32;
 
         for _ in 0..self.max_iter {
             // Assignment step (constrained).
