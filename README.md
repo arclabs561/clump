@@ -148,23 +148,9 @@ No optional features are enabled by default.
 See [`examples/README.md`](examples/README.md) for run commands and sample
 output.
 
-| Example | What it shows |
-|---------|---------------|
-| `quickstart` | K-means and DBSCAN on synthetic data |
-| `clustering` | Multiple algorithms on the same dataset, label comparison |
-| `streaming` | Mini-Batch K-means and DenStream on streaming data |
-| `evaluation` | Silhouette score, cluster quality metrics |
-| `flat_input` | Zero-copy `FlatRef` input from raw `&[f32]` |
-
 ```sh
 cargo run --example quickstart
 ```
-
-## Benchmarks
-
-`benches/comparison.rs` measures clump and linfa-clustering on identical
-synthetic inputs for k-means and DBSCAN. No comparative results are published
-here.
 
 ## License
 
