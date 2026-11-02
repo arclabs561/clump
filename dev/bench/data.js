@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793581151703,
+  "lastUpdate": 1793659009903,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -8821,6 +8821,142 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 115590,
             "range": "± 325",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "arc@arclabs.dev",
+            "name": "arc"
+          },
+          "committer": {
+            "email": "arc@arclabs.dev",
+            "name": "arc"
+          },
+          "distinct": true,
+          "id": "9203a846a12e9a0bc9fb9f3123a5df8eb82b547a",
+          "message": "readme: install line follows the 0.7 release\n\nThe 0.6 line would resolve to the previous series, not the published 0.7.0.",
+          "timestamp": "2026-11-02T17:12:19-05:00",
+          "tree_id": "3eb270c911a365eab790011a6fddcaf621470243",
+          "url": "https://github.com/arclabs561/clump/commit/9203a846a12e9a0bc9fb9f3123a5df8eb82b547a"
+        },
+        "date": 1793659009529,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 1270673,
+            "range": "± 10144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 6479454,
+            "range": "± 170525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 102433178,
+            "range": "± 499568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 14169725,
+            "range": "± 74151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 66243250,
+            "range": "± 301059",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 511570549,
+            "range": "± 1240206",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 1023040064,
+            "range": "± 2434530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 71148677,
+            "range": "± 265557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 7276328173,
+            "range": "± 28280652",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 5304414,
+            "range": "± 219615",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 21591201,
+            "range": "± 145311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 778637564,
+            "range": "± 6136986",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 604683853,
+            "range": "± 4929583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1790780703,
+            "range": "± 13886394",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2668213,
+            "range": "± 6843",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 10267705,
+            "range": "± 108385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 40786039,
+            "range": "± 283422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 249554660,
+            "range": "± 1949276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 144479,
+            "range": "± 1646",
             "unit": "ns/iter"
           }
         ]
