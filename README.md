@@ -16,7 +16,7 @@ See the [examples](examples/README.md) for streaming and constrained clustering.
 
 ```toml
 [dependencies]
-clump = "0.6"
+clump = "0.7"
 ```
 
 ```rust
