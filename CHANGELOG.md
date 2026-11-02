@@ -9,6 +9,8 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-01
+
 ### Added
 
 - `DistanceMetric::euclidean_radius` (default `None`). It returns a Euclidean
