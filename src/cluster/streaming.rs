@@ -261,13 +261,13 @@ impl<D: DistanceMetric> MiniBatchKmeans<D> {
             self.validate_dimension(points.row(0))?;
         }
 
-        // Assign and update.
-        let mut labels = Vec::with_capacity(points.n());
-        for i in 0..points.n() {
-            let point = points.row(i);
-            let cluster = self.assign(point);
-            self.update_centroid(cluster, point);
-            labels.push(cluster);
+        // Sculley (2010), Algorithm 1: assign every point to the centers as
+        // they stood at the start of the batch, then update the centers.
+        let labels: Vec<usize> = (0..points.n())
+            .map(|i| self.assign(points.row(i)))
+            .collect();
+        for (i, &cluster) in labels.iter().enumerate() {
+            self.update_centroid(cluster, points.row(i));
         }
 
         Ok(labels)

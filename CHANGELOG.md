@@ -9,6 +9,20 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+### Fixed
+
+- `MiniBatchKmeans::update_batch` assigns every point of a batch to the
+  centers as they stood at the start of the batch, then updates the centers,
+  as in Sculley (2010), Algorithm 1. It used to reassign each point after the
+  previous point's update, which is sequential online k-means: with centers
+  {0, 10}, the batch [6, 4.9] put both points in the cluster at 10.
+- `DenStream::update` returns the index the absorbing potential
+  micro-cluster has after the pruning pass in the same call, or `NOISE` if
+  that pass removed it. The returned index could be out of range or name a
+  different micro-cluster.
+- `CorrelationClustering::edges_from_distances` returns no edges for empty
+  input instead of panicking on an integer underflow.
+
 ## [0.7.0] - 2026-11-01
 
 ### Added

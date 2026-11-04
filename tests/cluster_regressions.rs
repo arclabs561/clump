@@ -1,6 +1,6 @@
 //! Regression tests for DBSCAN with non-Euclidean metrics at large n, OPTICS
-//! xi extraction, weighted correlation clustering, DenStream, CLAM, and the
-//! README's default k-means settings.
+//! xi extraction, weighted correlation clustering, DenStream, CLAM, the
+//! README's default k-means settings, and mini-batch k-means.
 
 mod fx {
     #![allow(dead_code, clippy::excessive_precision)]
@@ -358,4 +358,68 @@ fn readme_default_kmeans_reaches_lloyd_fixed_point() {
         worse, 0,
         "default tolerance left >1% inertia in {worse}/10 seeds (worst {worst:.3})"
     );
+}
+
+// --------------------------------------------- correlation edge construction
+
+/// `edges_from_distances` over no points has no pairs; `n * (n - 1) / 2`
+/// must not underflow.
+#[test]
+fn correlation_edges_from_empty_data_are_empty() {
+    let data: Vec<Vec<f32>> = Vec::new();
+    assert!(CorrelationClustering::edges_from_distances(&data, &Euclidean, 1.0).is_empty());
+    let one = vec![vec![1.0f32, 2.0]];
+    assert!(CorrelationClustering::edges_from_distances(&one, &Euclidean, 1.0).is_empty());
+}
+
+// ------------------------------------------------------- DenStream labels
+
+/// `update` returns an index into the potential micro-clusters. When the same
+/// call prunes, the index must still name the cluster that absorbed the
+/// point (or be `NOISE` if that cluster was pruned), not a shifted position.
+#[test]
+fn denstream_update_label_names_the_absorbing_cluster_after_pruning() {
+    let mut ds = DenStream::new(1.0, 3)
+        .with_initial_buffer_size(0)
+        .with_lambda(0.1)
+        .with_mu(3.0)
+        .with_beta(0.5)
+        .with_pruning_period(1);
+    for _ in 0..30 {
+        ds.update(&[0.0, 0.0]).unwrap();
+    }
+    let p = [100.0f32, 100.0];
+    let mut labelled = 0;
+    for step in 0..60 {
+        let label = ds.update(&p).unwrap();
+        if label != NOISE {
+            labelled += 1;
+            assert!(
+                label < ds.n_clusters(),
+                "step {step}: label {label} with {} p-micro-clusters",
+                ds.n_clusters()
+            );
+            assert_eq!(ds.predict(&p).unwrap(), label, "step {step}");
+        }
+    }
+    assert!(labelled > 0, "the far point never joined a p-micro-cluster");
+}
+
+// ------------------------------------------------------ MiniBatchKmeans
+
+/// Sculley (2010), Algorithm 1: each point of a mini-batch is assigned to its
+/// nearest center as of the start of the batch, then the centers are updated.
+/// With centers {0, 10}, the batch [6, 4.9] assigns 6 to 10 and 4.9 to 0;
+/// assigning 4.9 after 6 has moved its center to 8 would pick 8 instead.
+#[test]
+fn minibatch_kmeans_assigns_the_whole_batch_before_updating_centers() {
+    use clump::MiniBatchKmeans;
+    let mut mb = MiniBatchKmeans::new(2).with_seed(1);
+    let first = mb.update_batch(&vec![vec![0.0f32], vec![10.0]]).unwrap();
+    assert_ne!(first[0], first[1]);
+    let labels = mb.update_batch(&vec![vec![6.0f32], vec![4.9]]).unwrap();
+    assert_eq!(labels, vec![first[1], first[0]]);
+    // count 1 -> 2 for each center: (10 + 6) / 2 and (0 + 4.9) / 2.
+    assert_eq!(mb.centroids()[first[1]], vec![8.0]);
+    assert!((mb.centroids()[first[0]][0] - 2.45).abs() < 1e-6);
 }
