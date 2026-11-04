@@ -9,6 +9,8 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-04
+
 ### Fixed
 
 - `MiniBatchKmeans::update_batch` assigns every point of a batch to the
