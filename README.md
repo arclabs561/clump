@@ -136,7 +136,7 @@ No optional features are enabled by default.
 | Feature | Enables |
 |---|---|
 | `parallel` | Parallel computation with Rayon |
-| `gpu` | K-means assignment with Metal on macOS |
+| `gpu` | Nothing; kept so builds that enable it still compile |
 | `serde` | Serialization support |
 | `ndarray` | Conversions from `Array2` |
 | `simd` | Hardware-accelerated distance calculations through `innr` |
