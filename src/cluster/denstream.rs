@@ -565,7 +565,10 @@ impl<D: DistanceMetric> DenStream<D> {
     ///
     /// - Remove potential micro-clusters whose decayed weight < beta * mu.
     /// - Remove outlier micro-clusters whose weight is below the time-based threshold.
-    fn prune(&mut self) {
+    ///
+    /// Returns the post-pruning index of the potential micro-cluster at
+    /// `track`, or `None` if it was pruned.
+    fn prune(&mut self, track: Option<usize>) -> Option<usize> {
         let threshold = self.beta * self.mu;
         let ts = self.timestamp;
         let lambda = self.lambda;
@@ -574,7 +577,20 @@ impl<D: DistanceMetric> DenStream<D> {
         for mc in &mut self.p_micro_clusters {
             mc.decay(lambda, ts);
         }
-        self.p_micro_clusters.retain(|mc| mc.weight >= threshold);
+        let mut index = 0;
+        let mut kept = 0;
+        let mut tracked = None;
+        self.p_micro_clusters.retain(|mc| {
+            let keep = mc.weight >= threshold;
+            if keep {
+                if track == Some(index) {
+                    tracked = Some(kept);
+                }
+                kept += 1;
+            }
+            index += 1;
+            keep
+        });
 
         for mc in &mut self.o_micro_clusters {
             mc.decay(lambda, ts);
@@ -589,6 +605,7 @@ impl<D: DistanceMetric> DenStream<D> {
             let age = current_ts.saturating_sub(mc.creation_time);
             mc.weight >= outlier_weight_threshold(lam, t_p, age)
         });
+        tracked
     }
 }
 
@@ -685,7 +702,7 @@ impl<D: DistanceMetric> DenStream<D> {
         // Periodic pruning.
         self.updates_since_prune += 1;
         if self.updates_since_prune >= self.pruning_period() {
-            self.prune();
+            assigned_p_idx = self.prune(assigned_p_idx);
             self.updates_since_prune = 0;
         }
 

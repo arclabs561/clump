@@ -272,7 +272,7 @@ impl CorrelationClustering {
         threshold: f32,
     ) -> Vec<SignedEdge> {
         let n = data.len();
-        let mut edges = Vec::with_capacity(n * (n - 1) / 2);
+        let mut edges = Vec::with_capacity(n * n.saturating_sub(1) / 2);
         for i in 0..n {
             for j in (i + 1)..n {
                 let dist = metric.distance(&data[i], &data[j]);
