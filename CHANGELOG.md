@@ -4,15 +4,25 @@
 
 These entries identify source changes without assigning a package release.
 
-- The `gpu` feature no longer pulls in the `metal` and `objc` crates. Its Metal
-  k-means assignment module stopped being called when exact assignment was
-  restored (303b488) and was no longer compiled; the `metal` crate is
-  deprecated upstream in favor of `objc2-metal`. `gpu` stays as a no-op
-  feature, and the crate now forbids `unsafe` in every build.
 - Compute occupied cluster means before selecting replacement centroids for empty k-means clusters.
   ([f7a3b29](https://github.com/arclabs561/clump/commit/f7a3b2963e07b02aaa8fba1f09d44f4392548e42))
 
 ## [Unreleased]
+
+## [0.7.2] - 2026-11-04
+
+### Changed
+- With `simd`, `SquaredEuclidean` uses innr's `l2_distance_squared` (direct
+  subtraction, as before, but vectorized) and `CosineDistance` computes its
+  three sums in one pass with `innr::cosine_parts`, keeping clump's
+  zero-norm rule. innr is 0.7.8 (was 0.6.3). k-means bench with `simd` on an
+  Apple M3 (two criterion runs, machine loaded): n10000 d16 k100 -33%,
+  n1000 d128 k10 -74%, n200000 d128 k50 -83%.
+- The `gpu` feature no longer pulls in the `metal` and `objc` crates. Its
+  Metal k-means module stopped being called when exact assignment was
+  restored (303b488) and was no longer compiled; the `metal` crate is
+  deprecated upstream in favor of `objc2-metal`. `gpu` stays as a no-op
+  feature, and the crate now forbids `unsafe` in every build.
 
 ## [0.7.1] - 2026-11-04
 
