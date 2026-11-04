@@ -73,7 +73,11 @@ impl DistanceMetric for SquaredEuclidean {
         debug_assert_eq!(a.len(), b.len());
         // Keep the direct subtraction form. The three-dot expansion
         // `||a||^2 + ||b||^2 - 2*a.b` catastrophically cancels when vectors
-        // have a large common offset.
+        // have a large common offset. innr's kernel subtracts directly too.
+        #[cfg(feature = "simd")]
+        if a.len() >= 16 {
+            return innr::l2_distance_squared(a, b);
+        }
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| {
@@ -131,9 +135,8 @@ impl DistanceMetric for CosineDistance {
         debug_assert_eq!(a.len(), b.len());
         #[cfg(feature = "simd")]
         if a.len() >= 16 {
-            let dot = innr::dot(a, b);
-            let norm_a = innr::dot(a, a);
-            let norm_b = innr::dot(b, b);
+            // One pass for the three sums; clump's zero-norm rule below.
+            let (dot, norm_a, norm_b) = innr::cosine_parts(a, b);
             let denom = (norm_a * norm_b).sqrt();
             if denom < 1e-9 {
                 return 0.0;

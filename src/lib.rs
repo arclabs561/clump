@@ -1,8 +1,8 @@
 //! Dense clustering primitives.
 //!
 //! 9 clustering algorithms for dense `f32` vectors, generic over pluggable
-//! distance metrics. SIMD-accelerated (innr), with optional GPU (Metal) and
-//! parallel (rayon) support.
+//! distance metrics. SIMD-accelerated (innr), with optional parallel (rayon)
+//! support.
 //!
 //! **Batch**: [`Kmeans`], [`Dbscan`], [`Hdbscan`], [`EVoC`], [`CopKmeans`],
 //! [`CorrelationClustering`].
@@ -16,8 +16,7 @@
 //! [`NOISE`] (`usize::MAX`).
 
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(feature = "gpu"), forbid(unsafe_code))]
-#![cfg_attr(feature = "gpu", deny(unsafe_code))]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 /// CLAM: Clustering with Associative Memory helpers (requires `hopfield` feature).
