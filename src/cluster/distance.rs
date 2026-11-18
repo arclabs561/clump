@@ -14,6 +14,12 @@ pub trait DistanceMetric: Clone + Send + Sync {
     /// Compute the distance between two vectors of equal length.
     fn distance(&self, a: &[f32], b: &[f32]) -> f32;
 
+    /// Comparison key for nearest-centroid assignment. Smaller keys are closer.
+    #[doc(hidden)]
+    fn assignment_distance(&self, a: &[f32], b: &[f32]) -> f64 {
+        f64::from(self.distance(a, b))
+    }
+
     /// Whether this metric supports the expanded squared Euclidean identity
     /// `||x - c||^2 = ||x||^2 + ||c||^2 - 2*x.c` for faster assignment.
     fn supports_expanded_form(&self) -> bool {
@@ -87,6 +93,20 @@ impl DistanceMetric for SquaredEuclidean {
             .sum()
     }
 
+    #[inline]
+    fn assignment_distance(&self, a: &[f32], b: &[f32]) -> f64 {
+        let squared = self.distance(a, b);
+        if squared.is_normal() || (squared == 0.0 && a == b) {
+            return f64::from(squared);
+        }
+        // At the ends of the f32 range, different distances can round to
+        // infinity or zero. Widen before subtraction as well as squaring.
+        a.iter()
+            .zip(b)
+            .map(|(&x, &y)| (f64::from(x) - f64::from(y)).powi(2))
+            .sum()
+    }
+
     fn hamerly_distance(&self, a: &[f32], b: &[f32]) -> Option<f32> {
         Some(self.distance(a, b).max(0.0).sqrt())
     }
@@ -101,6 +121,11 @@ impl DistanceMetric for SquaredEuclidean {
 pub struct Euclidean;
 
 impl DistanceMetric for Euclidean {
+    #[inline]
+    fn assignment_distance(&self, a: &[f32], b: &[f32]) -> f64 {
+        SquaredEuclidean.assignment_distance(a, b)
+    }
+
     fn distance_is_squared(&self) -> bool {
         false
     }

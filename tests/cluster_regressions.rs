@@ -423,3 +423,29 @@ fn minibatch_kmeans_assigns_the_whole_batch_before_updating_centers() {
     assert_eq!(mb.centroids()[first[1]], vec![8.0]);
     assert!((mb.centroids()[first[0]][0] - 2.45).abs() < 1e-6);
 }
+
+#[test]
+fn nearest_centroid_survives_rescaling() {
+    for scale in [1.0, 1e30, 1e-30] {
+        let centers = vec![vec![-scale; 16], vec![scale; 16]];
+        let queries = [vec![0.0; 16], vec![4.0 * scale; 16]];
+
+        let emeans = clump::Emeans::new(2).with_seed(7).fit(&centers).unwrap();
+        assert_eq!(emeans.labels, [0, 1], "e-means training at {scale}");
+        assert_eq!(
+            emeans.predict(&queries).unwrap(),
+            [0, 1],
+            "e-means at {scale}"
+        );
+
+        let kmeans = Kmeans::with_metric(2, Euclidean)
+            .with_centroids(centers.clone())
+            .fit(&centers)
+            .unwrap();
+        assert_eq!(
+            kmeans.predict(&queries).unwrap(),
+            [0, 1],
+            "k-means at {scale}"
+        );
+    }
+}
