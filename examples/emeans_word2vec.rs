@@ -22,8 +22,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
     let points: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&b| f32::from_le_bytes(b))
         .collect();
     let data = FlatRef::new(&points, N, D);
     let started = Instant::now();
@@ -49,7 +51,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Score both trainers in f64 using an independent nearest-center scan.
     // Input, scoring, process startup and cargo compilation are outside the timer.
     let loss = points
-        .chunks_exact(D)
+        .as_chunks::<D>()
+        .0
+        .iter()
         .map(|p| {
             centers
                 .iter()
