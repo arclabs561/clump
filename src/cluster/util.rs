@@ -213,9 +213,9 @@ pub(crate) fn assign_nearest<D: DistanceMetric>(
     metric: &D,
 ) -> usize {
     let mut best_cluster = 0;
-    let mut best_dist = f32::MAX;
+    let mut best_dist = f64::INFINITY;
     for (k, centroid) in centroids.iter().enumerate() {
-        let dist = metric.distance(point, centroid);
+        let dist = metric.assignment_distance(point, centroid);
         if dist < best_dist {
             best_dist = dist;
             best_cluster = k;
