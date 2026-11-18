@@ -1,10 +1,10 @@
 //! Dense clustering primitives.
 //!
-//! 9 clustering algorithms for dense `f32` vectors, generic over pluggable
+//! Clustering algorithms for dense `f32` vectors, generic over pluggable
 //! distance metrics. SIMD-accelerated (innr), with optional parallel (rayon)
 //! support.
 //!
-//! **Batch**: [`Kmeans`], [`Dbscan`], [`Hdbscan`], [`EVoC`], [`CopKmeans`],
+//! **Batch**: [`Emeans`], [`Kmeans`], [`Dbscan`], [`Hdbscan`], [`EVoC`], [`CopKmeans`],
 //! [`CorrelationClustering`].
 //!
 //! **Streaming**: [`MiniBatchKmeans`], [`DenStream`].
@@ -30,8 +30,8 @@ pub mod error;
 pub use cluster::{
     ClusterHierarchy, ClusterLayer, ClusterNode, CompositeDistance, Constraint, CopKmeans,
     CorrelationClustering, CorrelationResult, CosineDistance, DataRef, Dbscan, DenStream,
-    DistanceMetric, EVoC, EVoCParams, Euclidean, FlatRef, Hdbscan, HdbscanResult,
-    InnerProductDistance, Kmeans, KmeansFit, MiniBatchKmeans, Optics, OpticsResult, SignedEdge,
-    SquaredEuclidean, NOISE,
+    DistanceMetric, EVoC, EVoCParams, Emeans, EmeansFit, Euclidean, FlatRef, Hdbscan,
+    HdbscanResult, InnerProductDistance, Kmeans, KmeansFit, MiniBatchKmeans, Optics, OpticsResult,
+    SignedEdge, SquaredEuclidean, NOISE,
 };
 pub use error::{Error, Result};

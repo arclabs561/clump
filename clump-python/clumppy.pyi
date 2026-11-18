@@ -59,6 +59,15 @@ def cop_kmeans(
     """
     ...
 
+def emeans(
+    data: Union[NDArray[np.floating], list[list[float]]],
+    k: int,
+    epochs: float = 5.0,
+    seed: Optional[int] = None,
+) -> tuple[NDArray[np.int64], NDArray[np.float64]]:
+    """Fit e-means and return nearest-centroid labels and finalized centroids."""
+    ...
+
 def kmeans(
     data: Union[NDArray[np.floating], list[list[float]]],
     k: int,

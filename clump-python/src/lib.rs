@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use clump::cluster::distance::Euclidean;
 use clump::cluster::metrics;
 use clump::{
-    Constraint, CopKmeans, CorrelationClustering, CorrelationResult, Dbscan, Hdbscan, Kmeans,
+    Constraint, CopKmeans, CorrelationClustering, CorrelationResult, Dbscan, Emeans, Hdbscan, Kmeans,
     KmeansFit, MiniBatchKmeans, Optics, OpticsResult, SignedEdge, NOISE,
 };
 
@@ -206,6 +206,30 @@ fn kmeans<'py>(
 
     let centroids = centroids_to_numpy(py, &fit.centroids)?;
     Ok((labels_to_numpy(py, fit.labels), centroids))
+}
+
+/// Fit squared-Euclidean e-means and return (nearest labels, finalized centroids).
+#[pyfunction]
+#[pyo3(signature = (data, k, epochs = 5.0, seed = None))]
+fn emeans<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    k: usize,
+    epochs: f64,
+    seed: Option<u64>,
+) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
+    let rows = extract_data(data)?;
+    let mut model = Emeans::new(k).with_epochs(epochs);
+    if let Some(seed) = seed {
+        model = model.with_seed(seed);
+    }
+    let fit = py
+        .detach(move || model.fit(&rows))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok((
+        labels_to_numpy(py, fit.labels),
+        centroids_to_numpy(py, &fit.centroids)?,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -710,6 +734,7 @@ fn clumppy(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cop_kmeans, m)?)?;
 
     // Standard algorithms
+    m.add_function(wrap_pyfunction!(emeans, m)?)?;
     m.add_function(wrap_pyfunction!(kmeans, m)?)?;
     m.add_function(wrap_pyfunction!(kmeans_fit, m)?)?;
     m.add_function(wrap_pyfunction!(dbscan, m)?)?;
