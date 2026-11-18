@@ -25,14 +25,15 @@ fn debug_validate_finite(data: &(impl DataRef + ?Sized)) {
     }
 }
 
-/// Silhouette score: mean silhouette coefficient across all points.
+/// Silhouette score: mean silhouette coefficient across non-noise points.
 ///
 /// For each point i:
 /// - a(i) = mean distance to other points in the same cluster
 /// - b(i) = mean distance to points in the nearest other cluster
 /// - s(i) = (b(i) - a(i)) / max(a(i), b(i))
 ///
-/// Returns the mean s(i) over all points. Range: [-1, 1].
+/// Singleton clusters contribute zero. Returns zero for fewer than two
+/// occupied clusters. Range: [-1, 1].
 /// Higher = better clustering. Score near 0 = overlapping clusters.
 ///
 /// Complexity: O(n^2 * d) for exact computation. For large n, consider
@@ -48,80 +49,52 @@ pub fn silhouette_score<D: DistanceMetric>(
         return 0.0;
     }
 
-    // Find the number of clusters (exclude NOISE sentinel = usize::MAX).
-    let noise = super::dbscan::NOISE;
-    let k = labels
-        .iter()
-        .copied()
-        .filter(|&l| l != noise)
-        .max()
-        .map(|m| m + 1)
-        .unwrap_or(0);
-    if k <= 1 {
+    // Labels can be sparse, especially after sampling. Size the accumulators
+    // by the number of occupied clusters, independent of label values.
+    let mut cluster_ids = std::collections::HashMap::new();
+    let mut cluster_sizes = Vec::new();
+    let mut points = Vec::new();
+    for (i, &label) in labels[..n].iter().enumerate() {
+        if label == super::dbscan::NOISE {
+            continue;
+        }
+        let cluster = *cluster_ids.entry(label).or_insert_with(|| {
+            cluster_sizes.push(0usize);
+            cluster_sizes.len() - 1
+        });
+        cluster_sizes[cluster] += 1;
+        points.push((i, cluster));
+    }
+    if cluster_sizes.len() < 2 {
         return 0.0;
     }
 
-    // For each point, accumulate distance sums to each cluster.
-    // cluster_dist_sum[i][c] = sum of distances from point i to all points in cluster c.
-    // cluster_sizes[c] = number of points in cluster c.
-    let mut cluster_sizes = vec![0usize; k];
-    for &l in labels {
-        if l < k {
-            cluster_sizes[l] += 1;
-        }
-    }
-
-    let mut total_silhouette = 0.0f64;
-
-    let mut counted = 0usize;
-    for i in 0..n {
-        let ci = labels[i];
-        if ci == noise || ci >= k {
+    let mut total = 0.0f64;
+    let mut sums = vec![0.0f64; cluster_sizes.len()];
+    for &(i, cluster) in &points {
+        if cluster_sizes[cluster] == 1 {
             continue;
         }
-        if cluster_sizes[ci] <= 1 {
-            // Singleton cluster: silhouette undefined, treat as 0.
-            continue;
-        }
-
-        // Accumulate distances from point i to each cluster.
-        let mut cluster_dist_sum = vec![0.0f64; k];
-        for j in 0..n {
-            if i == j || labels[j] == noise || labels[j] >= k {
-                continue;
-            }
-            let d = metric.distance(data.row(i), data.row(j)) as f64;
-            cluster_dist_sum[labels[j]] += d;
-        }
-
-        // a(i) = mean intra-cluster distance.
-        let a = cluster_dist_sum[ci] / (cluster_sizes[ci] - 1) as f64;
-
-        // b(i) = min mean inter-cluster distance.
-        let mut b = f64::MAX;
-        for c in 0..k {
-            if c == ci || cluster_sizes[c] == 0 {
-                continue;
-            }
-            let mean_dist = cluster_dist_sum[c] / cluster_sizes[c] as f64;
-            if mean_dist < b {
-                b = mean_dist;
+        sums.fill(0.0);
+        for &(j, other) in &points {
+            if i != j {
+                sums[other] += metric.distance(data.row(i), data.row(j)) as f64;
             }
         }
 
-        let s = if a.max(b) > 0.0 {
-            (b - a) / a.max(b)
-        } else {
-            0.0
-        };
-        total_silhouette += s;
-        counted += 1;
+        let a = sums[cluster] / (cluster_sizes[cluster] - 1) as f64;
+        let b = sums
+            .iter()
+            .enumerate()
+            .filter(|&(c, _)| c != cluster)
+            .map(|(c, sum)| sum / cluster_sizes[c] as f64)
+            .fold(f64::INFINITY, f64::min);
+        if a.max(b) > 0.0 {
+            total += (b - a) / a.max(b);
+        }
     }
 
-    if counted == 0 {
-        return 0.0;
-    }
-    (total_silhouette / counted as f64) as f32
+    (total / points.len() as f64) as f32
 }
 
 /// Calinski-Harabasz index (variance ratio criterion).
@@ -129,75 +102,50 @@ pub fn silhouette_score<D: DistanceMetric>(
 /// Ratio of between-cluster dispersion to within-cluster dispersion,
 /// adjusted by degrees of freedom. Higher = better.
 ///
-/// Complexity: O(n * k * d). Only needs centroids + one data pass.
+/// Noise points and empty clusters are excluded throughout.
+/// Complexity: O((n + k) * d). Only needs centroids + one data pass.
 pub fn calinski_harabasz(
     data: &(impl DataRef + ?Sized),
     labels: &[usize],
     centroids: &[Vec<f32>],
 ) -> f32 {
     debug_validate_finite(data);
-    let n = data.n();
-    let k = centroids.len();
+    let mut global = vec![0.0f64; data.d()];
+    let mut sizes = vec![0usize; centroids.len()];
+    let mut within = 0.0f64;
+    for (i, &label) in labels[..data.n()].iter().enumerate() {
+        let Some(centroid) = centroids.get(label) else {
+            continue;
+        };
+        sizes[label] += 1;
+        let row = data.row(i);
+        for (sum, &value) in global.iter_mut().zip(row) {
+            *sum += value as f64;
+        }
+        for (&value, &center) in row.iter().zip(centroid) {
+            within += (value as f64 - center as f64).powi(2);
+        }
+    }
+
+    let n: usize = sizes.iter().sum();
+    let k = sizes.iter().filter(|&&size| size > 0).count();
     if k <= 1 || n <= k {
         return 0.0;
     }
-
-    let d = data.d();
-
-    // Global centroid.
-    let mut global = vec![0.0f64; d];
-    for i in 0..n {
-        for (j, &x) in data.row(i).iter().enumerate() {
-            global[j] += x as f64;
-        }
-    }
-    for x in &mut global {
-        *x /= n as f64;
+    for sum in &mut global {
+        *sum /= n as f64;
     }
 
-    // Cluster sizes (skip noise points).
-    let noise = super::dbscan::NOISE;
-    let mut sizes = vec![0usize; k];
-    for &l in labels {
-        if l != noise && l < k {
-            sizes[l] += 1;
-        }
-    }
-
-    // Between-cluster dispersion: sum of n_k * ||c_k - c_global||^2.
     let mut between = 0.0f64;
-    for (ki, centroid) in centroids.iter().enumerate() {
-        let sq_dist: f64 = centroid
-            .iter()
-            .zip(global.iter())
-            .map(|(&c, &g)| {
-                let d = c as f64 - g;
-                d * d
-            })
-            .sum();
-        between += sizes[ki] as f64 * sq_dist;
-    }
-
-    // Within-cluster dispersion: sum of ||x_i - c_{label(i)}||^2.
-    // Skip noise points to avoid index-out-of-bounds.
-    let mut within = 0.0f64;
-    #[allow(clippy::needless_range_loop)] // i indexes both labels and data.row
-    for i in 0..n {
-        let l = labels[i];
-        if l == noise || l >= k {
-            continue;
+    for (centroid, size) in centroids.iter().zip(sizes) {
+        if size > 0 {
+            let sq_dist: f64 = centroid
+                .iter()
+                .zip(&global)
+                .map(|(&center, &mean)| (center as f64 - mean).powi(2))
+                .sum();
+            between += size as f64 * sq_dist;
         }
-        let centroid = &centroids[l];
-        let sq_dist: f64 = data
-            .row(i)
-            .iter()
-            .zip(centroid.iter())
-            .map(|(&x, &c)| {
-                let d = x as f64 - c as f64;
-                d * d
-            })
-            .sum();
-        within += sq_dist;
     }
 
     if within < f64::EPSILON {
@@ -306,81 +254,13 @@ pub fn silhouette_score_sampled<D: DistanceMetric>(
 
 /// Noise-aware silhouette score for density-based clustering.
 ///
-/// Like standard silhouette, but noise points (labeled `NOISE = usize::MAX`)
-/// are excluded from the computation rather than being treated as misclassified.
-/// This gives more meaningful scores for DBSCAN/HDBSCAN results where noise
-/// is an intentional output, not a failure.
-///
-/// Returns 0.0 if all points are noise or only one cluster exists.
+/// Uses the same non-noise population and singleton convention as [`silhouette_score`].
 pub fn silhouette_score_noise_aware<D: DistanceMetric>(
     data: &(impl DataRef + ?Sized),
     labels: &[usize],
     metric: &D,
 ) -> f32 {
-    debug_validate_finite(data);
-    let noise = super::dbscan::NOISE;
-    let n = data.n();
-
-    // Filter to non-noise points.
-    let non_noise_indices: Vec<usize> = (0..n).filter(|&i| labels[i] != noise).collect();
-    if non_noise_indices.len() <= 1 {
-        return 0.0;
-    }
-
-    let max_label = non_noise_indices
-        .iter()
-        .map(|&i| labels[i])
-        .max()
-        .unwrap_or(0);
-    let k = max_label + 1;
-    if k <= 1 {
-        return 0.0;
-    }
-
-    let mut cluster_sizes = vec![0usize; k];
-    for &i in &non_noise_indices {
-        cluster_sizes[labels[i]] += 1;
-    }
-
-    let mut total = 0.0f64;
-
-    for &i in &non_noise_indices {
-        let ci = labels[i];
-        if cluster_sizes[ci] <= 1 {
-            continue;
-        }
-
-        let mut cluster_dist_sum = vec![0.0f64; k];
-        for &j in &non_noise_indices {
-            if i == j {
-                continue;
-            }
-            let d = metric.distance(data.row(i), data.row(j)) as f64;
-            cluster_dist_sum[labels[j]] += d;
-        }
-
-        let a = cluster_dist_sum[ci] / (cluster_sizes[ci] - 1) as f64;
-
-        let mut b = f64::MAX;
-        for c in 0..k {
-            if c == ci || cluster_sizes[c] == 0 {
-                continue;
-            }
-            let mean_dist = cluster_dist_sum[c] / cluster_sizes[c] as f64;
-            if mean_dist < b {
-                b = mean_dist;
-            }
-        }
-
-        let s = if a.max(b) > 0.0 {
-            (b - a) / a.max(b)
-        } else {
-            0.0
-        };
-        total += s;
-    }
-
-    (total / non_noise_indices.len() as f64) as f32
+    silhouette_score(data, labels, metric)
 }
 
 /// Adjusted Rand Index (ARI) for comparing two clusterings.
@@ -749,6 +629,35 @@ mod tests {
     }
 
     #[test]
+    fn silhouette_includes_singletons_and_accepts_sparse_labels() {
+        let data = vec![vec![0.0], vec![1.0], vec![10.0], vec![1000.0]];
+        let labels = [7, 7, usize::MAX - 1, crate::NOISE];
+        let expected = (0.9 + 8.0 / 9.0) / 3.0;
+        for score in [
+            silhouette_score(&data, &labels, &Euclidean),
+            silhouette_score_noise_aware(&data, &labels, &Euclidean),
+            silhouette_score_sampled(&data, &labels, &Euclidean, data.len(), 42),
+        ] {
+            assert!((score - expected).abs() < 1e-6, "got {score}");
+        }
+    }
+
+    #[test]
+    fn silhouette_single_occupied_label() {
+        let data = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0]];
+        let labels = [7, 7, 7, crate::NOISE];
+        assert_eq!(silhouette_score(&data, &labels, &Euclidean), 0.0);
+        assert_eq!(
+            silhouette_score_noise_aware(&data, &labels, &Euclidean),
+            0.0
+        );
+        assert_eq!(
+            silhouette_score_sampled(&data, &labels, &Euclidean, 3, 42),
+            0.0
+        );
+    }
+
+    #[test]
     fn calinski_harabasz_well_separated() {
         let data = vec![
             vec![0.0, 0.0],
@@ -784,19 +693,16 @@ mod tests {
 
     #[test]
     fn calinski_harabasz_with_noise_labels() {
-        let noise = crate::NOISE;
-        let data = vec![
-            vec![0.0, 0.0],
-            vec![0.1, 0.1],
-            vec![10.0, 10.0],
-            vec![10.1, 10.1],
-            vec![50.0, 50.0], // noise point
-        ];
-        let labels = vec![0, 0, 1, 1, noise];
-        let centroids = vec![vec![0.05, 0.05], vec![10.05, 10.05]];
-        // Must not panic on NOISE labels.
-        let ch = calinski_harabasz(&data, &labels, &centroids);
-        assert!(ch > 0.0, "CH should be positive, got {ch}");
+        let data = vec![vec![0.0], vec![2.0], vec![10.0], vec![12.0], vec![1000.0]];
+        let labels = [0, 0, 2, 2, crate::NOISE];
+        let centroids = vec![vec![1.0], vec![500.0], vec![11.0]];
+        // Between = 100, within = 4, with 4 points and 2 occupied clusters.
+        assert_eq!(calinski_harabasz(&data, &labels, &centroids), 50.0);
+        assert_eq!(
+            calinski_harabasz(&data, &[crate::NOISE; 5], &centroids),
+            0.0
+        );
+        assert_eq!(calinski_harabasz(&data, &[2; 5], &centroids), 0.0);
     }
 
     #[test]
