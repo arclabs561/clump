@@ -66,6 +66,7 @@ pub mod correlation;
 mod dbscan;
 pub mod denstream;
 pub mod distance;
+mod emeans;
 mod evoc;
 pub mod flat;
 mod hdbscan;
@@ -87,6 +88,7 @@ pub use distance::{
     CompositeDistance, CosineDistance, DistanceMetric, Euclidean, InnerProductDistance,
     SquaredEuclidean,
 };
+pub use emeans::{Emeans, EmeansFit};
 pub use evoc::{ClusterHierarchy, ClusterLayer, ClusterNode, EVoC, EVoCParams};
 pub use flat::{DataRef, FlatRef};
 pub use hdbscan::{Hdbscan, HdbscanResult};

@@ -49,6 +49,7 @@ method to label new points. `Dbscan::fit_predict` assigns noise points to
 | Algorithm | Kind | Discovers k | Noise handling | Batch input |
 |-----------|------|-------------|----------------|-------------|
 | K-means | Centroid | No (k required) | None | `DataRef` |
+| E-means | Centroid (exponential mini-batch updates) | No (k required) | None | `DataRef` |
 | Mini-Batch K-means | Centroid (streaming) | No (k required) | None | `DataRef` |
 | DBSCAN | Density | Yes | `NOISE` sentinel | `DataRef` |
 | HDBSCAN | Density (hierarchical) | Yes | `NOISE` sentinel | `DataRef` |
@@ -57,6 +58,16 @@ method to label new points. `Dbscan::fit_predict` assigns noise points to
 | COP-Kmeans | Constrained centroid | No (k required) | None | `DataRef` + constraints |
 | OPTICS | Density (reachability) | Yes | `NOISE` when extracting clusters | `DataRef` |
 | Correlation Clustering | Graph-based | Yes | None | `SignedEdge` list |
+
+## E-means
+
+`Emeans::new(k).with_epochs(2.5).with_seed(42).fit(&data)?` fits the
+[squared-Euclidean e-means algorithm](https://arxiv.org/abs/2611.09501).
+The CPU implementation shuffles a fixed dataset and chooses its batch size
+and initial step from the Faiss scaling laws. The closing pass averages
+its assignments. One final nearest-centroid pass produces labels consistent
+with `fit.predict(&data)` and costs one additional scan beyond the epoch budget.
+Python exposes the same operation as `clumppy.emeans(data, k, epochs=2.5, seed=42)`.
 
 ## Zero-copy flat input
 

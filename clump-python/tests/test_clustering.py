@@ -460,3 +460,12 @@ def test_clumppy_metrics_with_noise_labels():
     assert db >= 0
     sil = clumppy.silhouette_score(data, labels)
     assert -1 <= sil <= 1
+
+
+def test_emeans_returns_final_nearest_labels():
+    data = np.asarray(_three_clusters(), dtype=np.float32)
+    labels, centers = clumppy.emeans(data, 3, epochs=2.5, seed=42)
+    distances = ((data[:, None] - centers) ** 2).sum(axis=2)
+    np.testing.assert_array_equal(labels, distances.argmin(axis=1))
+    assert centers.shape == (3, 2)
+    np.testing.assert_array_equal(labels, clumppy.emeans(data.tolist(), 3, 2.5, 42)[0])
