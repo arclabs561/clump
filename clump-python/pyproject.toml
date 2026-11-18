@@ -4,10 +4,11 @@ build-backend = "maturin"
 
 [project]
 name = "clumppy"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Dense clustering: k-means, DBSCAN, HDBSCAN, COP-Kmeans (constrained), correlation clustering, and more."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.20"]
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "Arc", email = "attobop@gmail.com" }]
 keywords = ["clustering", "kmeans", "dbscan", "hdbscan", "constrained-clustering", "correlation-clustering"]
@@ -25,7 +26,7 @@ Documentation = "https://docs.rs/clump"
 Repository = "https://github.com/arclabs561/clump"
 
 [project.optional-dependencies]
-numpy = ["numpy>=1.20"]
+numpy = []
 
 [tool.maturin]
 module-name = "clumppy"

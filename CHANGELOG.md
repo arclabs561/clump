@@ -9,6 +9,24 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-18
+
+### Added
+
+- CPU e-means clustering with fractional epochs and final nearest-centroid
+  labels. Rust exposes `Emeans` and Python exposes `clumppy.emeans` in 0.2.0.
+
+### Fixed
+
+- Silhouette includes singleton points as zero and handles sparse labels.
+  Calinski–Harabasz excludes noise and empty clusters from its mean and
+  degrees of freedom.
+- Euclidean centroid assignment preserves distance order when squaring extreme
+  coordinates would overflow or underflow a single-precision float.
+- Installing the Python package now brings in NumPy, which the clustering
+  functions need to return their arrays. The wheel metadata reflects the
+  Python 3.9 minimum of PyO3 and rust-numpy 0.30.
+
 ## [0.7.2] - 2026-11-04
 
 ### Changed
