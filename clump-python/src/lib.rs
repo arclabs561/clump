@@ -727,7 +727,7 @@ fn centroids_to_numpy<'py>(
 
 #[pymodule]
 fn clumppy(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("__version__", "0.1.1")?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     // Unique algorithms (the gaps)
     m.add_function(wrap_pyfunction!(correlation_clustering, m)?)?;

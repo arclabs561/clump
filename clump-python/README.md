@@ -32,6 +32,7 @@ labels = clumppy.cop_kmeans(
 
 # Standard algorithms
 labels, centroids = clumppy.kmeans(data, k=2, seed=42)
+labels, centroids = clumppy.emeans(data, k=2, epochs=3.5, seed=42)
 labels = clumppy.dbscan(data, eps=0.5, min_points=5)    # noise = -1
 labels = clumppy.hdbscan(data, min_cluster_size=5)       # noise = -1
 
@@ -46,6 +47,7 @@ score = clumppy.silhouette_score(data, labels)
 | `correlation_clustering` | Signed-edge graph partitioning, auto-determines k |
 | `cop_kmeans` | K-means with must-link and cannot-link constraints |
 | `kmeans` | Standard k-means, returns (labels, centroids) |
+| `emeans` | CPU e-means with fractional epochs, returns (labels, centroids) |
 | `dbscan` | Density-based clustering, noise labeled -1 |
 | `hdbscan` | Hierarchical DBSCAN, noise labeled -1 |
 | `silhouette_score` | Mean silhouette coefficient, range [-1, 1] |
