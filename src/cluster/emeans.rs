@@ -110,49 +110,31 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
     }
 }
 
-// Store the roundoff from each addition as a smaller, nonoverlapping partial.
-// Ordinary f32 data sums exactly in f64 for many rows, leaving partials empty.
-#[derive(Clone, Copy, Default)]
-struct ClosingSum {
-    sum: f64,
-    partials: Option<std::num::NonZeroUsize>,
-}
+// An expansion of nonoverlapping f64 terms, used only when the plain sum
+// cannot establish the rounded f32 mean. All inputs are exact f32 values.
+#[derive(Default)]
+struct AccurateSum(Vec<f64>);
 
-impl ClosingSum {
-    // FastTwoSum with its operands ordered by magnitude.
-    fn split_add(a: f64, b: f64) -> (f64, f64) {
-        let (large, small) = if a.abs() >= b.abs() { (a, b) } else { (b, a) };
-        let sum = large + small;
-        (sum, small - (sum - large))
-    }
-
-    fn add(&mut self, value: f32, storage: &mut Vec<Vec<f64>>) {
+impl AccurateSum {
+    fn add(&mut self, value: f32) {
         let mut value = f64::from(value);
-        if let Some(index) = self.partials {
-            storage[index.get() - 1].retain_mut(|partial| {
-                let (sum, error) = Self::split_add(value, *partial);
-                value = sum;
-                *partial = error;
-                error != 0.0
-            });
-        }
-        let (sum, error) = Self::split_add(value, self.sum);
-        self.sum = sum;
-        if error != 0.0 {
-            if let Some(index) = self.partials {
-                storage[index.get() - 1].push(error);
+        self.0.retain_mut(|partial| {
+            let (large, small) = if value.abs() >= partial.abs() {
+                (value, *partial)
             } else {
-                storage.push(vec![error]);
-                self.partials = std::num::NonZeroUsize::new(storage.len());
-            }
+                (*partial, value)
+            };
+            value = large + small;
+            *partial = small - (value - large);
+            *partial != 0.0
+        });
+        if value != 0.0 {
+            self.0.push(value);
         }
     }
 
-    fn mean(&self, count: usize, storage: &[Vec<f64>]) -> f32 {
-        let correction = self
-            .partials
-            .map_or(0.0, |i| storage[i.get() - 1].iter().sum::<f64>());
-        ((correction + self.sum) / count as f64) as f32
+    fn mean(&self, count: usize) -> f32 {
+        (self.0.iter().sum::<f64>() / count as f64) as f32
     }
 }
 
@@ -263,13 +245,17 @@ impl Emeans {
             .collect();
         let mut mass = vec![1.0 / 65536.0; self.k];
         let mut batch = Totals::new(self.k, d);
-        let mut closing = vec![vec![ClosingSum::default(); d]; self.k];
-        let mut closing_counts = vec![0; self.k];
-        let mut partials = Vec::new();
+        let mut closing = Totals::new(self.k, d);
+        let mut closing_rows = 0;
+        let mut largest = vec![0_u32; self.k];
+        let mut labels = vec![0; n];
         let mut step = 0;
         let mut passes = passes.peekable();
         while let Some(rows) = passes.next() {
             let last = passes.peek().is_none();
+            if last {
+                closing_rows = rows;
+            }
             order.shuffle(&mut rng);
             for indices in order[..rows].chunks(batch_size) {
                 for &i in indices {
@@ -277,10 +263,11 @@ impl Emeans {
                     let cluster = util::assign_nearest(point, &centers, &SquaredEuclidean);
                     batch.add(cluster, point);
                     if last {
-                        closing_counts[cluster] += 1;
-                        for (sum, &value) in closing[cluster].iter_mut().zip(point) {
-                            sum.add(value, &mut partials);
-                        }
+                        closing.add(cluster, point);
+                        labels[i] = cluster;
+                        // Positive float bits sort by magnitude; integer max vectorizes.
+                        let max_bits = point.iter().map(|x| x.abs().to_bits()).max().unwrap();
+                        largest[cluster] = largest[cluster].max(max_bits);
                     }
                 }
                 batch.update(&mut centers, &mut mass, step_size(alpha, step, total_steps));
@@ -290,14 +277,39 @@ impl Emeans {
                 }
             }
         }
+        let mut retry: Vec<Vec<(usize, AccurateSum)>> = (0..self.k).map(|_| Vec::new()).collect();
         for (j, center) in centers.iter_mut().enumerate() {
-            if closing_counts[j] > 0 {
-                for (x, sum) in center.iter_mut().zip(&closing[j]) {
-                    *x = sum.mean(closing_counts[j], &partials);
+            let count = closing.counts[j] as f64;
+            if count == 0.0 {
+                continue;
+            }
+            // Summing n terms in f64 incurs at most gamma(n) * sum(abs(x))
+            // error. Bound sum(abs(x)) by n * max and allow for rounding.
+            let error = if count * f64::EPSILON < 1.0 {
+                2.0 * count * count * f64::from(f32::from_bits(largest[j])) * f64::EPSILON
+            } else {
+                f64::INFINITY
+            };
+            for (axis, (x, &sum)) in center.iter_mut().zip(&closing.sums[j]).enumerate() {
+                *x = (sum / count) as f32;
+                if ((sum - error) / count) as f32 != ((sum + error) / count) as f32 {
+                    retry[j].push((axis, AccurateSum::default()));
                 }
             }
         }
-        let mut labels = vec![0; n];
+        if retry.iter().any(|axes| !axes.is_empty()) {
+            for &i in &order[..closing_rows] {
+                let point = data.row(i);
+                for (axis, acc) in &mut retry[labels[i]] {
+                    acc.add(point[*axis]);
+                }
+            }
+            for (j, axes) in retry.iter().enumerate() {
+                for (axis, acc) in axes {
+                    centers[j][*axis] = acc.mean(closing.counts[j]);
+                }
+            }
+        }
         util::assign_all(data, &centers, &mut labels, &SquaredEuclidean);
         Ok(EmeansFit {
             centroids: centers,
@@ -387,8 +399,7 @@ mod tests {
 
     #[test]
     fn closing_sum_handles_cancellation_at_multiple_scales() {
-        let mut sum = ClosingSum::default();
-        let mut partials = Vec::new();
+        let mut sum = AccurateSum::default();
         for x in [
             2_f32.powi(107),
             2_f32.powi(90),
@@ -400,9 +411,9 @@ mod tests {
             -2_f32.powi(90),
             13.,
         ] {
-            sum.add(x, &mut partials);
+            sum.add(x);
         }
-        assert_eq!(sum.mean(9, &partials), -1. / 3.);
+        assert_eq!(sum.mean(9), -1. / 3.);
     }
 
     #[test]
