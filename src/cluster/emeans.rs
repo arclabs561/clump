@@ -110,6 +110,34 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
     }
 }
 
+// An expansion of nonoverlapping f64 terms, used only when the plain sum
+// cannot establish the rounded f32 mean. All inputs are exact f32 values.
+#[derive(Default)]
+struct AccurateSum(Vec<f64>);
+
+impl AccurateSum {
+    fn add(&mut self, value: f32) {
+        let mut value = f64::from(value);
+        self.0.retain_mut(|partial| {
+            let (large, small) = if value.abs() >= partial.abs() {
+                (value, *partial)
+            } else {
+                (*partial, value)
+            };
+            value = large + small;
+            *partial = small - (value - large);
+            *partial != 0.0
+        });
+        if value != 0.0 {
+            self.0.push(value);
+        }
+    }
+
+    fn mean(&self, count: usize) -> f32 {
+        (self.0.iter().sum::<f64>() / count as f64) as f32
+    }
+}
+
 struct Totals {
     sums: Vec<Vec<f64>>,
     counts: Vec<usize>,
@@ -218,10 +246,16 @@ impl Emeans {
         let mut mass = vec![1.0 / 65536.0; self.k];
         let mut batch = Totals::new(self.k, d);
         let mut closing = Totals::new(self.k, d);
+        let mut closing_rows = 0;
+        let mut largest = vec![0_u32; self.k];
+        let mut labels = vec![0; n];
         let mut step = 0;
         let mut passes = passes.peekable();
         while let Some(rows) = passes.next() {
             let last = passes.peek().is_none();
+            if last {
+                closing_rows = rows;
+            }
             order.shuffle(&mut rng);
             for indices in order[..rows].chunks(batch_size) {
                 for &i in indices {
@@ -230,6 +264,10 @@ impl Emeans {
                     batch.add(cluster, point);
                     if last {
                         closing.add(cluster, point);
+                        labels[i] = cluster;
+                        // Positive float bits sort by magnitude; integer max vectorizes.
+                        let max_bits = point.iter().map(|x| x.abs().to_bits()).max().unwrap();
+                        largest[cluster] = largest[cluster].max(max_bits);
                     }
                 }
                 batch.update(&mut centers, &mut mass, step_size(alpha, step, total_steps));
@@ -239,14 +277,39 @@ impl Emeans {
                 }
             }
         }
+        let mut retry: Vec<Vec<(usize, AccurateSum)>> = (0..self.k).map(|_| Vec::new()).collect();
         for (j, center) in centers.iter_mut().enumerate() {
-            if closing.counts[j] > 0 {
-                for (x, &sum) in center.iter_mut().zip(&closing.sums[j]) {
-                    *x = (sum / closing.counts[j] as f64) as f32;
+            let count = closing.counts[j] as f64;
+            if count == 0.0 {
+                continue;
+            }
+            // Summing n terms in f64 incurs at most gamma(n) * sum(abs(x))
+            // error. Bound sum(abs(x)) by n * max and allow for rounding.
+            let error = if count * f64::EPSILON < 1.0 {
+                2.0 * count * count * f64::from(f32::from_bits(largest[j])) * f64::EPSILON
+            } else {
+                f64::INFINITY
+            };
+            for (axis, (x, &sum)) in center.iter_mut().zip(&closing.sums[j]).enumerate() {
+                *x = (sum / count) as f32;
+                if ((sum - error) / count) as f32 != ((sum + error) / count) as f32 {
+                    retry[j].push((axis, AccurateSum::default()));
                 }
             }
         }
-        let mut labels = vec![0; n];
+        if retry.iter().any(|axes| !axes.is_empty()) {
+            for &i in &order[..closing_rows] {
+                let point = data.row(i);
+                for (axis, acc) in &mut retry[labels[i]] {
+                    acc.add(point[*axis]);
+                }
+            }
+            for (j, axes) in retry.iter().enumerate() {
+                for (axis, acc) in axes {
+                    centers[j][*axis] = acc.mean(closing.counts[j]);
+                }
+            }
+        }
         util::assign_all(data, &centers, &mut labels, &SquaredEuclidean);
         Ok(EmeansFit {
             centroids: centers,
@@ -315,6 +378,71 @@ mod tests {
         let fit = Emeans::new(1).with_epochs(0.34).fit(&data).unwrap();
         assert!(data.contains(&fit.centroids[0]));
         assert_eq!(fit.labels, [0; 3]);
+    }
+
+    #[test]
+    fn closing_mean_retains_small_residuals_across_seeded_orders() {
+        // The large values cancel exactly on each axis.
+        let large = 2_f32.powi(80);
+        let data = [
+            vec![large, -large],
+            vec![1., -2.],
+            vec![1., -2.],
+            vec![-large, large],
+        ];
+        for seed in 0..32 {
+            let fit = Emeans::new(1).with_seed(seed).fit(&data).unwrap();
+            assert_eq!(fit.centroids, [vec![0.5, -1.]], "seed {seed}");
+            assert_eq!(fit.labels, [0; 4]);
+        }
+    }
+
+    #[test]
+    fn fractional_closing_retry_only_uses_sampled_rows() {
+        let large = 2_f32.powi(80);
+        let rows = [
+            vec![large, 0.],
+            vec![1., 3.],
+            vec![1., 6.],
+            vec![-large, 9.],
+        ];
+        let mut seen = [false; 4];
+        for seed in 0..64 {
+            let fit = Emeans::new(1)
+                .with_seed(seed)
+                .with_epochs(0.75)
+                .fit(&rows)
+                .unwrap();
+            // The second coordinate identifies the omitted row.
+            let center = &fit.centroids[0];
+            let omitted = [6., 5., 4., 3.]
+                .iter()
+                .position(|&y| y == center[1])
+                .unwrap();
+            seen[omitted] = true;
+            let want = [-large / 3., 1. / 3., 1. / 3., large / 3.];
+            assert_eq!(center[0], want[omitted]);
+        }
+        assert_eq!(seen, [true; 4]);
+    }
+
+    #[test]
+    fn closing_sum_handles_cancellation_at_multiple_scales() {
+        let mut sum = AccurateSum::default();
+        for x in [
+            2_f32.powi(107),
+            2_f32.powi(90),
+            -2_f32.powi(54),
+            -2_f32.powi(107),
+            2_f32.powi(54),
+            -12.,
+            -4.,
+            -2_f32.powi(90),
+            13.,
+        ] {
+            sum.add(x);
+        }
+        assert_eq!(sum.mean(9), -1. / 3.);
     }
 
     #[test]
