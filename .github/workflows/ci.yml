@@ -163,3 +163,50 @@ jobs:
           fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
+
+  compare-closing-fits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+      - name: Compare Word2Vec fits on this runner
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cargo build --release --features simd --example emeans_word2vec
+          cp target/release/examples/emeans_word2vec /tmp/candidate
+          git show "$BASE_SHA:src/cluster/emeans.rs" > src/cluster/emeans.rs
+          cargo build --release --features simd --example emeans_word2vec
+          cp target/release/examples/emeans_word2vec /tmp/baseline
+          python3 - <<'PY'
+          import sys, random, statistics
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          from bench_emeans_word2vec import load_data, fit
+          data = Path("target/word2vec-10k.f32")
+          load_data(data)
+          bins = {"baseline": "/tmp/baseline", "candidate": "/tmp/candidate"}
+          for binary in bins.values():
+              fit(binary, data, "emeans", 1, 99)
+          rng = random.Random(4123)
+          for budget in (1, 4, 8):
+              elapsed = {key: [] for key in bins}
+              delta = []
+              for repeat in range(3):
+                  for seed in (7, 13, 23, 37, 53):
+                      order = list(bins)
+                      rng.shuffle(order)
+                      losses = []
+                      for key in order:
+                          wall, loss = fit(bins[key], data, "emeans", budget, seed)
+                          elapsed[key].append(wall)
+                          losses.append(loss)
+                      delta.append(abs(losses[0] - losses[1]))
+              t = {key: statistics.median(v) for key, v in elapsed.items()}
+              print(f"WORD2VEC budget={budget} median_seconds={t} ratio={t['candidate']/t['baseline']:.4f} max_loss_change={max(delta)}")
+          PY
