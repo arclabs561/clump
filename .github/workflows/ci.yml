@@ -209,4 +209,28 @@ jobs:
                       delta.append(abs(losses[0] - losses[1]))
               t = {key: statistics.median(v) for key, v in elapsed.items()}
               print(f"WORD2VEC budget={budget} median_seconds={t} ratio={t['candidate']/t['baseline']:.4f} max_loss_change={max(delta)}")
+          times = []
+          losses = []
+          for repeat in range(3):
+              for seed in (7, 13, 23, 37, 53):
+                  wall, loss = fit("/tmp/candidate", data, "kmeans", 8, seed)
+                  times.append(wall)
+                  losses.append(loss)
+          print(f"LLOYD8 median_seconds={statistics.median(times)} max_loss={max(losses)}")
           PY
+          cat >> src/cluster/emeans.rs <<'RS'
+          #[test]
+          fn baseline_cancelling_mean() {
+              let large = 2_f32.powi(80);
+              let data = [vec![large], vec![1.0], vec![1.0], vec![-large]];
+              for seed in 0..32 {
+                  let fit = Emeans::new(1).with_seed(seed).fit(&data).unwrap();
+                  assert_eq!(fit.centroids[0], [0.5], "seed {seed}");
+              }
+          }
+          RS
+          if cargo test --lib baseline_cancelling_mean > /tmp/baseline-test.log 2>&1; then
+              echo "Unexpected baseline pass"
+              exit 1
+          fi
+          grep -A7 'baseline_cancelling_mean stdout' /tmp/baseline-test.log
