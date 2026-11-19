@@ -110,27 +110,39 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
     }
 }
 
-// Neumaier summation retains small contributions when larger terms later cancel.
-#[derive(Clone, Copy, Default)]
+// Store the roundoff from each addition as a smaller, nonoverlapping partial.
+// Ordinary f32 data sums exactly in f64 for many rows, leaving partials empty.
+#[derive(Clone, Default)]
 struct ClosingSum {
     sum: f64,
-    correction: f64,
+    partials: Vec<f64>,
 }
 
 impl ClosingSum {
-    fn add(&mut self, value: f32) {
-        let value = f64::from(value);
-        let next = self.sum + value;
-        self.correction += if self.sum.abs() >= value.abs() {
-            (self.sum - next) + value
-        } else {
-            (value - next) + self.sum
-        };
-        self.sum = next;
+    // FastTwoSum with its operands ordered by magnitude.
+    fn split_add(a: f64, b: f64) -> (f64, f64) {
+        let (large, small) = if a.abs() >= b.abs() { (a, b) } else { (b, a) };
+        let sum = large + small;
+        (sum, small - (sum - large))
     }
 
-    fn mean(self, count: usize) -> f32 {
-        ((self.sum + self.correction) / count as f64) as f32
+    fn add(&mut self, value: f32) {
+        let mut value = f64::from(value);
+        self.partials.retain_mut(|partial| {
+            let (sum, error) = Self::split_add(value, *partial);
+            value = sum;
+            *partial = error;
+            error != 0.0
+        });
+        let (sum, error) = Self::split_add(value, self.sum);
+        self.sum = sum;
+        if error != 0.0 {
+            self.partials.push(error);
+        }
+    }
+
+    fn mean(&self, count: usize) -> f32 {
+        ((self.partials.iter().sum::<f64>() + self.sum) / count as f64) as f32
     }
 }
 
@@ -360,6 +372,25 @@ mod tests {
             assert_eq!(fit.centroids, [vec![0.5, -1.]], "seed {seed}");
             assert_eq!(fit.labels, [0; 4]);
         }
+    }
+
+    #[test]
+    fn closing_sum_handles_cancellation_at_multiple_scales() {
+        let mut sum = ClosingSum::default();
+        for x in [
+            2_f32.powi(107),
+            2_f32.powi(90),
+            -2_f32.powi(54),
+            -2_f32.powi(107),
+            2_f32.powi(54),
+            -12.,
+            -4.,
+            -2_f32.powi(90),
+            13.,
+        ] {
+            sum.add(x);
+        }
+        assert_eq!(sum.mean(9), -1. / 3.);
     }
 
     #[test]
