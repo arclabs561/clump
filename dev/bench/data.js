@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795023281602,
+  "lastUpdate": 1795061988941,
   "repoUrl": "https://github.com/arclabs561/clump",
   "entries": {
     "Benchmark": [
@@ -10061,6 +10061,144 @@ window.BENCHMARK_DATA = {
             "name": "minibatch_kmeans/5x200_d16_k10",
             "value": 62744,
             "range": "± 491",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "henry@henrywallace.io",
+            "name": "Henry Wallace",
+            "username": "arclabs561"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "feef9e14516a0b89e050733614a5b849f0c8a879",
+          "message": "Preserve small residuals in e-means closing centroids (#35)\n\n* Retain cancelling residuals in e-means closing centroid sums\n\n* Retain all nonzero partials across multiple cancellation scales\n\n* Allocate partial storage only for coordinates that lose precision\n\n* Temporarily compare paired release-mode Word2Vec fits on the same runner\n\n* Retry only closing coordinates whose error bound spans two f32 results\n\n* Measure the matched-loss Lloyd budget and reproduce the exact-mean failure on base\n\n* Remove the temporary comparison job after collecting benchmark results\n\n* Verify closing retries use only the seeded fractional pass",
+          "timestamp": "2026-11-18T22:58:46-05:00",
+          "tree_id": "be6381f0b20b035651d5ccc6c2e9665f9c238bd9",
+          "url": "https://github.com/arclabs561/clump/commit/feef9e14516a0b89e050733614a5b849f0c8a879"
+        },
+        "date": 1795061988160,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "kmeans/n1000_d16_k10",
+            "value": 1059859,
+            "range": "± 12695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d16_k10",
+            "value": 5450308,
+            "range": "± 95124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n10000_d16_k100",
+            "value": 87155136,
+            "range": "± 390648",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n1000_d128_k10",
+            "value": 11776348,
+            "range": "± 82678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k10",
+            "value": 54989720,
+            "range": "± 248535",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n50000_d16_k100",
+            "value": 435894863,
+            "range": "± 1653715",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n100000_d16_k100",
+            "value": 872962219,
+            "range": "± 4778999",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n5000_d128_k10_highmag",
+            "value": 59912703,
+            "range": "± 462068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "kmeans/n200000_d128_k50",
+            "value": 6050219824,
+            "range": "± 52542915",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n1000_d16",
+            "value": 4439202,
+            "range": "± 73743",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n2000_d16",
+            "value": 17643423,
+            "range": "± 85296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n10000_d16",
+            "value": 626087691,
+            "range": "± 4953430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n50000_d3",
+            "value": 455654923,
+            "range": "± 1626295",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dbscan/n15000_d16",
+            "value": 1438092786,
+            "range": "± 13091927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n500_d16",
+            "value": 2276559,
+            "range": "± 27564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n1000_d16",
+            "value": 8862347,
+            "range": "± 38102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n2000_d16",
+            "value": 34576694,
+            "range": "± 281395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hdbscan/n5000_d16",
+            "value": 216265724,
+            "range": "± 705859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "minibatch_kmeans/5x200_d16_k10",
+            "value": 100248,
+            "range": "± 741",
             "unit": "ns/iter"
           }
         ]
