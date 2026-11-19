@@ -398,6 +398,35 @@ mod tests {
     }
 
     #[test]
+    fn fractional_closing_retry_only_uses_sampled_rows() {
+        let large = 2_f32.powi(80);
+        let rows = [
+            vec![large, 0.],
+            vec![1., 3.],
+            vec![1., 6.],
+            vec![-large, 9.],
+        ];
+        let mut seen = [false; 4];
+        for seed in 0..64 {
+            let fit = Emeans::new(1)
+                .with_seed(seed)
+                .with_epochs(0.75)
+                .fit(&rows)
+                .unwrap();
+            // The second coordinate identifies the omitted row.
+            let center = &fit.centroids[0];
+            let omitted = [6., 5., 4., 3.]
+                .iter()
+                .position(|&y| y == center[1])
+                .unwrap();
+            seen[omitted] = true;
+            let want = [-large / 3., 1. / 3., 1. / 3., large / 3.];
+            assert_eq!(center[0], want[omitted]);
+        }
+        assert_eq!(seen, [true; 4]);
+    }
+
+    #[test]
     fn closing_sum_handles_cancellation_at_multiple_scales() {
         let mut sum = AccurateSum::default();
         for x in [
