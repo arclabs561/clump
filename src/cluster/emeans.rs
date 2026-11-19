@@ -112,10 +112,10 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
 
 // Store the roundoff from each addition as a smaller, nonoverlapping partial.
 // Ordinary f32 data sums exactly in f64 for many rows, leaving partials empty.
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Default)]
 struct ClosingSum {
     sum: f64,
-    partials: Vec<f64>,
+    partials: Option<std::num::NonZeroUsize>,
 }
 
 impl ClosingSum {
@@ -126,23 +126,33 @@ impl ClosingSum {
         (sum, small - (sum - large))
     }
 
-    fn add(&mut self, value: f32) {
+    fn add(&mut self, value: f32, storage: &mut Vec<Vec<f64>>) {
         let mut value = f64::from(value);
-        self.partials.retain_mut(|partial| {
-            let (sum, error) = Self::split_add(value, *partial);
-            value = sum;
-            *partial = error;
-            error != 0.0
-        });
+        if let Some(index) = self.partials {
+            storage[index.get() - 1].retain_mut(|partial| {
+                let (sum, error) = Self::split_add(value, *partial);
+                value = sum;
+                *partial = error;
+                error != 0.0
+            });
+        }
         let (sum, error) = Self::split_add(value, self.sum);
         self.sum = sum;
         if error != 0.0 {
-            self.partials.push(error);
+            if let Some(index) = self.partials {
+                storage[index.get() - 1].push(error);
+            } else {
+                storage.push(vec![error]);
+                self.partials = std::num::NonZeroUsize::new(storage.len());
+            }
         }
     }
 
-    fn mean(&self, count: usize) -> f32 {
-        ((self.partials.iter().sum::<f64>() + self.sum) / count as f64) as f32
+    fn mean(&self, count: usize, storage: &[Vec<f64>]) -> f32 {
+        let correction = self
+            .partials
+            .map_or(0.0, |i| storage[i.get() - 1].iter().sum::<f64>());
+        ((correction + self.sum) / count as f64) as f32
     }
 }
 
@@ -255,6 +265,7 @@ impl Emeans {
         let mut batch = Totals::new(self.k, d);
         let mut closing = vec![vec![ClosingSum::default(); d]; self.k];
         let mut closing_counts = vec![0; self.k];
+        let mut partials = Vec::new();
         let mut step = 0;
         let mut passes = passes.peekable();
         while let Some(rows) = passes.next() {
@@ -268,7 +279,7 @@ impl Emeans {
                     if last {
                         closing_counts[cluster] += 1;
                         for (sum, &value) in closing[cluster].iter_mut().zip(point) {
-                            sum.add(value);
+                            sum.add(value, &mut partials);
                         }
                     }
                 }
@@ -282,7 +293,7 @@ impl Emeans {
         for (j, center) in centers.iter_mut().enumerate() {
             if closing_counts[j] > 0 {
                 for (x, sum) in center.iter_mut().zip(&closing[j]) {
-                    *x = sum.mean(closing_counts[j]);
+                    *x = sum.mean(closing_counts[j], &partials);
                 }
             }
         }
@@ -377,6 +388,7 @@ mod tests {
     #[test]
     fn closing_sum_handles_cancellation_at_multiple_scales() {
         let mut sum = ClosingSum::default();
+        let mut partials = Vec::new();
         for x in [
             2_f32.powi(107),
             2_f32.powi(90),
@@ -388,9 +400,9 @@ mod tests {
             -2_f32.powi(90),
             13.,
         ] {
-            sum.add(x);
+            sum.add(x, &mut partials);
         }
-        assert_eq!(sum.mean(9), -1. / 3.);
+        assert_eq!(sum.mean(9, &partials), -1. / 3.);
     }
 
     #[test]
