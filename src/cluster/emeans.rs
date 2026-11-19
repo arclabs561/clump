@@ -110,6 +110,30 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
     }
 }
 
+// Neumaier summation retains small contributions when larger terms later cancel.
+#[derive(Clone, Copy, Default)]
+struct ClosingSum {
+    sum: f64,
+    correction: f64,
+}
+
+impl ClosingSum {
+    fn add(&mut self, value: f32) {
+        let value = f64::from(value);
+        let next = self.sum + value;
+        self.correction += if self.sum.abs() >= value.abs() {
+            (self.sum - next) + value
+        } else {
+            (value - next) + self.sum
+        };
+        self.sum = next;
+    }
+
+    fn mean(self, count: usize) -> f32 {
+        ((self.sum + self.correction) / count as f64) as f32
+    }
+}
+
 struct Totals {
     sums: Vec<Vec<f64>>,
     counts: Vec<usize>,
@@ -217,7 +241,8 @@ impl Emeans {
             .collect();
         let mut mass = vec![1.0 / 65536.0; self.k];
         let mut batch = Totals::new(self.k, d);
-        let mut closing = Totals::new(self.k, d);
+        let mut closing = vec![vec![ClosingSum::default(); d]; self.k];
+        let mut closing_counts = vec![0; self.k];
         let mut step = 0;
         let mut passes = passes.peekable();
         while let Some(rows) = passes.next() {
@@ -229,7 +254,10 @@ impl Emeans {
                     let cluster = util::assign_nearest(point, &centers, &SquaredEuclidean);
                     batch.add(cluster, point);
                     if last {
-                        closing.add(cluster, point);
+                        closing_counts[cluster] += 1;
+                        for (sum, &value) in closing[cluster].iter_mut().zip(point) {
+                            sum.add(value);
+                        }
                     }
                 }
                 batch.update(&mut centers, &mut mass, step_size(alpha, step, total_steps));
@@ -240,9 +268,9 @@ impl Emeans {
             }
         }
         for (j, center) in centers.iter_mut().enumerate() {
-            if closing.counts[j] > 0 {
-                for (x, &sum) in center.iter_mut().zip(&closing.sums[j]) {
-                    *x = (sum / closing.counts[j] as f64) as f32;
+            if closing_counts[j] > 0 {
+                for (x, sum) in center.iter_mut().zip(&closing[j]) {
+                    *x = sum.mean(closing_counts[j]);
                 }
             }
         }
@@ -315,6 +343,23 @@ mod tests {
         let fit = Emeans::new(1).with_epochs(0.34).fit(&data).unwrap();
         assert!(data.contains(&fit.centroids[0]));
         assert_eq!(fit.labels, [0; 3]);
+    }
+
+    #[test]
+    fn closing_mean_retains_small_residuals_across_seeded_orders() {
+        // The large values cancel exactly on each axis.
+        let large = 2_f32.powi(80);
+        let data = [
+            vec![large, -large],
+            vec![1., -2.],
+            vec![1., -2.],
+            vec![-large, large],
+        ];
+        for seed in 0..32 {
+            let fit = Emeans::new(1).with_seed(seed).fit(&data).unwrap();
+            assert_eq!(fit.centroids, [vec![0.5, -1.]], "seed {seed}");
+            assert_eq!(fit.labels, [0; 4]);
+        }
     }
 
     #[test]
