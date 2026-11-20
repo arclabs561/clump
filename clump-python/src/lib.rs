@@ -272,16 +272,20 @@ fn dbscan<'py>(
 ///     data: Points as (n, d) numpy array or list of lists.
 ///     min_cluster_size: Minimum points for a cluster to persist.
 ///     min_points: k for core distance computation (default: min_cluster_size).
+///     allow_single_cluster: Allow all points to form one cluster (default:
+///         False, as in the hdbscan library and scikit-learn). With False,
+///         data that never splits into two clusters is all noise.
 ///
 /// Returns:
 ///     numpy.ndarray of cluster labels (int64). Noise points are labeled -1.
 #[pyfunction]
-#[pyo3(signature = (data, min_cluster_size, min_points = None))]
+#[pyo3(signature = (data, min_cluster_size, min_points = None, allow_single_cluster = false))]
 fn hdbscan<'py>(
     py: Python<'py>,
     data: &Bound<'py, PyAny>,
     min_cluster_size: usize,
     min_points: Option<usize>,
+    allow_single_cluster: bool,
 ) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let vecs = extract_data(data)?;
 
@@ -290,6 +294,7 @@ fn hdbscan<'py>(
     let labels = Hdbscan::new()
         .with_min_cluster_size(min_cluster_size)
         .with_min_samples(min_samples)
+        .with_allow_single_cluster(allow_single_cluster)
         .fit_predict(&vecs)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
