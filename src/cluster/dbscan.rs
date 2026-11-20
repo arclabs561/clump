@@ -281,7 +281,7 @@ impl<D: DistanceMetric> Dbscan<D> {
             let neighbor_neighbors = self.region_query_grid(data, neighbor_idx, grid, cell_size);
             if neighbor_neighbors.len() + 1 >= self.min_pts {
                 for nn in neighbor_neighbors {
-                    if !visited[nn] {
+                    if !visited[nn] || labels[nn] == NOISE_LABEL {
                         to_process.push(nn);
                     }
                 }
@@ -327,7 +327,7 @@ impl<D: DistanceMetric> Dbscan<D> {
 
             if neighbor_neighbors.len() + 1 >= self.min_pts {
                 for nn in neighbor_neighbors {
-                    if !visited[nn] {
+                    if !visited[nn] || labels[nn] == NOISE_LABEL {
                         to_process.push(nn);
                     }
                 }
@@ -502,7 +502,7 @@ impl<D: DistanceMetric> Dbscan<D> {
                     let nn = range_query(neighbor_idx);
                     if nn.len() + 1 >= self.min_pts {
                         for idx in nn {
-                            if !visited[idx] {
+                            if !visited[idx] || labels[idx] == NOISE_LABEL {
                                 to_process.push(idx);
                             }
                         }
@@ -530,6 +530,97 @@ impl<D: DistanceMetric> Dbscan<D> {
 #[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
+
+    /// Noise set by definition: a point is noise iff it is not a core point
+    /// and no core point lies within epsilon of it.
+    fn reference_noise(data: &[Vec<f32>], eps: f32, min_pts: usize) -> Vec<bool> {
+        let n = data.len();
+        let dist = |a: &[f32], b: &[f32]| -> f32 {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (x - y) * (x - y))
+                .sum::<f32>()
+                .sqrt()
+        };
+        let within: Vec<Vec<usize>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .filter(|&j| dist(&data[i], &data[j]) <= eps)
+                    .collect()
+            })
+            .collect();
+        let core: Vec<bool> = within.iter().map(|w| w.len() >= min_pts).collect();
+        (0..n)
+            .map(|i| !core[i] && !within[i].iter().any(|&j| core[j]))
+            .collect()
+    }
+
+    #[test]
+    fn border_point_visited_first_joins_its_cluster() {
+        // Point 0 is not core (one neighbour) but lies within epsilon of the
+        // core point at 0.9, which is reached from 1.8 during expansion.
+        let data = vec![vec![0.0f32], vec![1.8], vec![0.9], vec![2.7]];
+        let labels = Dbscan::new(1.0, 3).fit_predict(&data).unwrap();
+        assert_eq!(labels, vec![0, 0, 0, 0]);
+
+        // The same points in another order already gave one cluster.
+        let reordered = vec![vec![0.9f32], vec![1.8], vec![0.0], vec![2.7]];
+        assert_eq!(
+            Dbscan::new(1.0, 3).fit_predict(&reordered).unwrap(),
+            vec![0, 0, 0, 0]
+        );
+    }
+
+    fn pseudo_random_points(n: usize, d: usize, seed: u64) -> Vec<Vec<f32>> {
+        let mut state = seed;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        };
+        (0..n).map(|_| (0..d).map(|_| next()).collect()).collect()
+    }
+
+    fn assert_noise_matches_definition(n: usize, d: usize, eps: f32, min_pts: usize) {
+        let data = pseudo_random_points(n, d, 0x2545_F491_4F6C_DD1D);
+        let labels = Dbscan::new(eps, min_pts).fit_predict(&data).unwrap();
+        let expected = reference_noise(&data, eps, min_pts);
+        let wrong = (0..n)
+            .filter(|&i| (labels[i] == NOISE) != expected[i])
+            .count();
+        let noise = expected.iter().filter(|&&x| x).count();
+        assert!(
+            noise > 0 && noise < n,
+            "n={n} d={d}: degenerate case, noise={noise}"
+        );
+        assert_eq!(
+            wrong, 0,
+            "n={n} d={d}: {wrong} points disagree with the definition"
+        );
+    }
+
+    #[test]
+    fn noise_set_matches_the_definition_with_precomputed_distances() {
+        assert_noise_matches_definition(60, 2, 0.12, 4);
+        assert_noise_matches_definition(1500, 2, 0.03, 5);
+        assert_noise_matches_definition(1500, 16, 1.05, 5);
+    }
+
+    // Above 16,384 points the distance matrix is not precomputed: d <= 5 uses
+    // the grid index and higher d the projection index. The O(n^2) reference
+    // makes these slow in debug builds.
+    #[test]
+    #[ignore = "slow: O(n^2) reference on 17,000 points; run with --ignored --release"]
+    fn noise_set_matches_the_definition_with_the_grid_index() {
+        assert_noise_matches_definition(17_000, 2, 0.008, 5);
+    }
+
+    #[test]
+    #[ignore = "slow: O(n^2) reference on 17,000 points; run with --ignored --release"]
+    fn noise_set_matches_the_definition_with_the_projection_index() {
+        assert_noise_matches_definition(17_000, 8, 0.42, 5);
+    }
 
     #[test]
     fn test_dbscan_two_clusters() {
