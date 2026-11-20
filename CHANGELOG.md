@@ -9,6 +9,18 @@ These entries identify source changes without assigning a package release.
 
 ## [Unreleased]
 
+### Changed
+
+- `Hdbscan` no longer selects the root of the hierarchy unless
+  `with_allow_single_cluster(true)` is set, matching the `hdbscan` library and
+  scikit-learn. Data that never splits into two clusters of at least
+  `min_cluster_size` points is now all noise by default; it used to come back
+  as one cluster. A parent cluster now wins a stability tie with its children.
+
+### Fixed
+
+- `Hdbscan` panicked on a single point; it now returns one noise label.
+
 ## [0.7.3] - 2026-11-18
 
 ### Added

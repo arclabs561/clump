@@ -82,6 +82,7 @@ use super::dbscan::NOISE;
 pub struct Hdbscan<D: DistanceMetric = Euclidean> {
     min_samples: usize,
     min_cluster_size: usize,
+    allow_single_cluster: bool,
     metric: D,
 }
 
@@ -100,6 +101,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
         Self {
             min_samples: 5,
             min_cluster_size: 5,
+            allow_single_cluster: false,
             metric,
         }
     }
@@ -114,6 +116,26 @@ impl<D: DistanceMetric> Hdbscan<D> {
     /// Set `min_cluster_size` (minimum points for a cluster to persist).
     pub fn with_min_cluster_size(mut self, min_cluster_size: usize) -> Self {
         self.min_cluster_size = min_cluster_size;
+        self
+    }
+
+    /// Allow the root of the hierarchy (all points as one cluster) to be
+    /// selected. Default `false`, as in the McInnes `hdbscan` library and
+    /// scikit-learn.
+    ///
+    /// The root's stability is measured from the lowest density in the data,
+    /// so it often exceeds the summed stability of its children even when the
+    /// data has clear clusters; the reference implementations therefore leave
+    /// it out of excess-of-mass selection unless asked. With `false`, data
+    /// that never splits into two clusters of at least `min_cluster_size`
+    /// points is labeled entirely as noise. Set `true` when a single cluster
+    /// is a valid answer.
+    ///
+    /// When the root is selected, every point is assigned to it. The
+    /// reference implementations additionally relabel its low-density points
+    /// as noise; clump does not.
+    pub fn with_allow_single_cluster(mut self, allow: bool) -> Self {
+        self.allow_single_cluster = allow;
         self
     }
 
@@ -135,6 +157,7 @@ impl Default for Hdbscan<Euclidean> {
         Self {
             min_samples: 5,
             min_cluster_size: 5,
+            allow_single_cluster: false,
             metric: Euclidean,
         }
     }
@@ -180,6 +203,13 @@ fn build_mst<D: DistanceMetric>(
     }
     util::validate_finite(data)?;
 
+    // A single point has no neighbors and no edges; `extract_clusters` labels
+    // it as noise. Returning here avoids taking a core distance from an empty
+    // row.
+    if n == 1 {
+        return Ok(Vec::new());
+    }
+
     const MAX_MATRIX_BYTES: usize = 1024 * 1024 * 1024;
     let use_matrix = (n as u64) * (n as u64) * 4 <= MAX_MATRIX_BYTES as u64;
 
@@ -211,7 +241,12 @@ impl<D: DistanceMetric> Hdbscan<D> {
     /// Noise points are labeled with `NOISE` (`usize::MAX`).
     pub fn fit_predict(&self, data: &(impl DataRef + ?Sized)) -> Result<Vec<usize>> {
         let mst = build_mst(data, &self.metric, self.min_samples, self.min_cluster_size)?;
-        let (labels, _) = extract_clusters(&mst, data.n(), self.min_cluster_size);
+        let (labels, _) = extract_clusters(
+            &mst,
+            data.n(),
+            self.min_cluster_size,
+            self.allow_single_cluster,
+        );
         Ok(labels)
     }
 
@@ -227,7 +262,12 @@ impl<D: DistanceMetric> Hdbscan<D> {
     /// Noise points get score 1.0. Score in [0, 1]; higher = more outlier-like.
     pub fn fit(&self, data: &(impl DataRef + ?Sized)) -> Result<HdbscanResult> {
         let mst = build_mst(data, &self.metric, self.min_samples, self.min_cluster_size)?;
-        let (labels, outlier_scores) = extract_clusters(&mst, data.n(), self.min_cluster_size);
+        let (labels, outlier_scores) = extract_clusters(
+            &mst,
+            data.n(),
+            self.min_cluster_size,
+            self.allow_single_cluster,
+        );
         Ok(HdbscanResult {
             labels,
             outlier_scores,
@@ -353,6 +393,7 @@ fn extract_clusters(
     mst: &[(usize, usize, f32)],
     n: usize,
     min_cluster_size: usize,
+    allow_single_cluster: bool,
 ) -> (Vec<usize>, Vec<f32>) {
     if n == 1 {
         return (vec![NOISE], vec![1.0]);
@@ -577,12 +618,18 @@ fn extract_clusters(
         }
     }
     for i in order {
-        if !has_cluster_child[i] {
+        let child_sum: f64 = children[i].iter().map(|&c| subtree_stab[c]).sum();
+        if !is_child[i] && !allow_single_cluster {
+            // Root: not a candidate (see `with_allow_single_cluster`). Its
+            // children keep whatever selection they reached.
+            subtree_stab[i] = child_sum;
+        } else if !has_cluster_child[i] {
             // Leaf cluster: select it.
             selected[i] = true;
         } else {
-            let child_sum: f64 = children[i].iter().map(|&c| subtree_stab[c]).sum();
-            if stability[i] > child_sum {
+            // A parent wins ties, as in the reference implementation, which
+            // deselects it only when the children's sum is strictly larger.
+            if stability[i] >= child_sum {
                 selected[i] = true;
                 deselect_descendants(&children, i, &mut selected);
                 subtree_stab[i] = stability[i];
@@ -891,8 +938,16 @@ mod tests {
         let data = make_cluster(&[0.0, 0.0], 20, 0.5);
 
         let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(15);
-        let labels = hdbscan.fit_predict(&data).unwrap();
 
+        // Default: the root is not a candidate, so one blob is all noise.
+        let labels = hdbscan.fit_predict(&data).unwrap();
+        assert!(labels.iter().all(|&l| l == NOISE), "{labels:?}");
+
+        let labels = hdbscan
+            .clone()
+            .with_allow_single_cluster(true)
+            .fit_predict(&data)
+            .unwrap();
         let non_noise: Vec<usize> = labels.iter().copied().filter(|&l| l != NOISE).collect();
         assert!(!non_noise.is_empty(), "should find at least one cluster");
 
@@ -953,11 +1008,28 @@ mod tests {
     }
 
     #[test]
+    fn single_point_is_noise_not_a_panic() {
+        let data = vec![vec![1.0f32, 2.0]];
+        for allow in [false, true] {
+            let h = Hdbscan::new().with_allow_single_cluster(allow);
+            assert_eq!(h.fit_predict(&data).unwrap(), vec![NOISE]);
+            let r = h.fit(&data).unwrap();
+            assert_eq!(r.labels, vec![NOISE]);
+            assert_eq!(r.outlier_scores, vec![1.0]);
+        }
+    }
+
+    #[test]
     fn fit_predict_with_noise_api() {
         let mut data = make_cluster(&[0.0, 0.0], 15, 0.3);
         data.push(vec![100.0, 100.0]);
 
-        let hdbscan = Hdbscan::new().with_min_samples(3).with_min_cluster_size(5);
+        // One blob plus an outlier never splits into two clusters, so the
+        // only candidate is the root.
+        let hdbscan = Hdbscan::new()
+            .with_min_samples(3)
+            .with_min_cluster_size(5)
+            .with_allow_single_cluster(true);
         let labels = hdbscan.fit_predict_with_noise(&data).unwrap();
 
         assert_eq!(labels.len(), 16);
