@@ -111,13 +111,12 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
 }
 
 // An expansion of nonoverlapping f64 terms, used only when the plain sum
-// cannot establish the rounded f32 mean. All inputs are exact f32 values.
+// cannot establish the rounded f32 mean.
 #[derive(Default)]
 struct AccurateSum(Vec<f64>);
 
 impl AccurateSum {
-    fn add(&mut self, value: f32) {
-        let mut value = f64::from(value);
+    fn add(&mut self, mut value: f64) {
         self.0.retain_mut(|partial| {
             let (large, small) = if value.abs() >= partial.abs() {
                 (value, *partial)
@@ -133,8 +132,46 @@ impl AccurateSum {
         }
     }
 
-    fn mean(&self, count: usize) -> f32 {
-        (self.0.iter().sum::<f64>() / count as f64) as f32
+    fn mean(mut self, mut count: usize) -> f32 {
+        let approx = self.0.iter().sum::<f64>() / count as f64;
+        let rounded = approx as f32;
+        let center = f64::from(rounded);
+        if approx == center {
+            return rounded;
+        }
+        let next = if approx > center {
+            rounded.next_up()
+        } else {
+            rounded.next_down()
+        };
+        if !next.is_finite() {
+            return rounded;
+        }
+
+        // Compare the exact sum with count times the midpoint. The midpoint
+        // and its powers-of-two multiples are exact in f64; their product
+        // with the full count need not be. The largest surviving term gives
+        // the sign even when the f64 approximation landed on the midpoint.
+        let mut term = -(center + f64::from(next)) * 0.5;
+        while count != 0 {
+            if count & 1 != 0 {
+                self.add(term);
+            }
+            term *= 2.0;
+            count >>= 1;
+        }
+        let residual = self.0.last().copied().unwrap_or(0.0);
+        if residual == 0.0 {
+            if rounded.to_bits() & 1 == 0 {
+                rounded
+            } else {
+                next
+            }
+        } else if (residual > 0.0) == (next > rounded) {
+            next
+        } else {
+            rounded
+        }
     }
 }
 
@@ -301,12 +338,12 @@ impl Emeans {
             for &i in &order[..closing_rows] {
                 let point = data.row(i);
                 for (axis, acc) in &mut retry[labels[i]] {
-                    acc.add(point[*axis]);
+                    acc.add(f64::from(point[*axis]));
                 }
             }
-            for (j, axes) in retry.iter().enumerate() {
+            for (j, axes) in retry.into_iter().enumerate() {
                 for (axis, acc) in axes {
-                    centers[j][*axis] = acc.mean(closing.counts[j]);
+                    centers[j][axis] = acc.mean(closing.counts[j]);
                 }
             }
         }
@@ -427,6 +464,24 @@ mod tests {
     }
 
     #[test]
+    fn closing_mean_rounds_on_the_correct_side_of_a_midpoint() {
+        let tiny = 2_f32.powi(-100);
+        for low in [0.5_f32, 0.5_f32.next_up()] {
+            let high = low.next_up();
+            let even = if low.to_bits() & 1 == 0 { low } else { high };
+            for (delta, expected) in [(-tiny, low), (0., even), (tiny, high)] {
+                for sign in [1., -1.] {
+                    let data = [2. * low, 2. * high, delta, 0.].map(|value| vec![value * sign]);
+                    for seed in [0, 1, 7] {
+                        let fit = Emeans::new(1).with_seed(seed).fit(&data).unwrap();
+                        assert_eq!(fit.centroids[0][0].to_bits(), (expected * sign).to_bits());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn closing_sum_handles_cancellation_at_multiple_scales() {
         let mut sum = AccurateSum::default();
         for x in [
@@ -440,7 +495,7 @@ mod tests {
             -2_f32.powi(90),
             13.,
         ] {
-            sum.add(x);
+            sum.add(f64::from(x));
         }
         assert_eq!(sum.mean(9), -1. / 3.);
     }
