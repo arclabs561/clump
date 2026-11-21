@@ -45,6 +45,10 @@ ndarray = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+[[example]]
+name = "dbscan_json"
+test = true
+
 [[bench]]
 name = "clustering"
 harness = false

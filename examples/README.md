@@ -5,6 +5,25 @@ script when the data is absent.
 
 ## Getting started
 
+### Cluster your own points
+
+Each row is one point. Give every row the same number of numeric coordinates.
+From a checkout, run DBSCAN with radius 0.25 and a minimum of two points
+within that radius, counting the point itself.
+
+```sh
+echo '[[0,0],[10,10],[0.1,0],[10.1,10],[0,0.1],[30,30]]' > points.json
+cargo run --quiet --example dbscan_json -- 0.25 2 < points.json
+# [0,1,0,1,0,null]
+cargo run --quiet --example dbscan_json -- 0.25 3 < points.json
+# [0,null,0,null,0,null]
+```
+
+Output labels follow input order. Equal numeric labels belong to the same
+cluster in that run. The pair near (10,10) becomes noise (`null`) when the
+minimum rises to three. Substitute your file and pick a radius in your
+coordinates' Euclidean units.
+
 ### `quickstart`
 
 Generates a mixed 2D dataset (two blobs plus an outlier), runs k-means and
