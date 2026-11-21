@@ -161,6 +161,43 @@ internal (cluster geometry):
 This run uses Euclidean k-means on unprocessed pixels; the reported scores are
 descriptive, not a benchmark against other representations or algorithms.
 
+### E-means finalizers
+
+Should a codebook keep the last pass’s means, or smooth the centers more
+heavily for future inputs? The [e-means paper, Appendix I](https://arxiv.org/html/2611.09501v1#A9)
+reports a small held-out benefit on DEEP*. This example tests that choice
+on unnormalized Word2Vec embeddings and raw 8×8 digit images. The ground-truth
+digit labels play no role in fitting or scoring.
+
+From the repository root, in an active Python 3.12 virtual environment:
+
+```bash
+python -m pip install maturin faiss-cpu==1.16.0 scikit-learn==1.9.1 numpy==2.5.5
+maturin develop --release -m clump-python/Cargo.toml
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python scripts/bench_emeans_finalizers.py
+```
+
+Each Faiss CPU run uses the same initialization, assignments and split events
+for three readouts: the training EMA, the closing-pass mean, and an independent
+EMA with a constant step. Validation MSE selects one step for each dataset
+and codebook size from 1/16, 1/4, 1 and 4 times the training schedule’s floor.
+The CSV also records Clump’s native closing means and end-to-end fit time.
+Clump uses its own RNG, so the paired comparisons below use Faiss for both
+readouts. Values are medians of five per-seed percentage changes in mean
+squared distance to the nearest center. Negative values are improvements.
+
+| Dataset | Training rows | Centers | Selected multiplier | Train change | Held-out change | Held-out wins |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Digits | 1,024 | 8 | 1 | +0.059% | +0.010% | 2/5 |
+| Digits | 1,024 | 64 | 4 | +0.575% | +0.100% | 0/5 |
+| Word2Vec | 4,096 | 32 | 1 | +0.267% | −0.052% | 4/5 |
+| Word2Vec | 4,096 | 256 | 1 | +2.470% | −1.104% | 5/5 |
+
+All runs use three epochs and one fixed train/validation/test split per dataset.
+Slower averaging helped most with the larger word-vector codebook, at a cost
+in training distortion. It gave no consistent gain on the digits split.
+The script writes the per-seed losses to `target/emeans-finalizers.csv`.
+
 ## Datasets
 
 `data/` is not tracked. The data-gated examples no-op with a fetch message when
