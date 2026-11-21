@@ -64,4 +64,22 @@ fn main() {
             i, data[i][0], data[i][1], tag
         );
     }
+
+    // A single dense group can have outliers. At distance 1 the first
+    // three points are connected. The remaining points join at 8 and 10.
+    let points: Vec<Vec<f32>> = [0., 1., 2., 10., 20.].map(|x| vec![x]).into();
+    let model = Hdbscan::new().with_min_samples(1).with_min_cluster_size(3);
+    for allow in [false, true] {
+        let labels = model
+            .clone()
+            .with_allow_single_cluster(allow)
+            .fit_predict_with_noise(&points)
+            .unwrap();
+        let members: Vec<f32> = points
+            .iter()
+            .zip(&labels)
+            .filter_map(|(p, label)| label.map(|_| p[0]))
+            .collect();
+        println!("HDBSCAN allow_single_cluster={allow}: members {members:?}");
+    }
 }

@@ -70,6 +70,14 @@ def test_hdbscan_basic():
     assert len(non_noise) >= 2
 
 
+def test_hdbscan_one_cluster_with_halo():
+    points = [[0.], [1.], [2.], [10.], [20.]]
+    labels = clumppy.hdbscan(points, min_cluster_size=3, min_points=1)
+    assert labels.tolist() == [-1] * 5
+    labels = clumppy.hdbscan(points, min_cluster_size=3, min_points=1, allow_single_cluster=True)
+    assert labels.tolist() == [0, 0, 0, -1, -1]
+
+
 def test_cop_kmeans_must_link():
     data = [
         [0.0, 0.0],
