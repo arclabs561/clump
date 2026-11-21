@@ -64,6 +64,7 @@ def emeans(
     k: int,
     epochs: float = 5.0,
     seed: Optional[int] = None,
+    speed: Optional[float] = None,
 ) -> tuple[NDArray[np.int64], NDArray[np.float64]]:
     """Fit e-means and return nearest-centroid labels and finalized centroids."""
     ...

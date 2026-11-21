@@ -11,6 +11,7 @@ pub struct Emeans {
     k: usize,
     epochs: f64,
     seed: Option<u64>,
+    speed: Option<f64>,
 }
 
 /// Finalized centroids and their nearest-centroid assignments.
@@ -77,7 +78,12 @@ fn step_size(alpha: f64, step: usize, total: usize) -> f64 {
     alpha * (0.1 + 0.45 * (1.0 + phase.cos()))
 }
 
-fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
+fn revive(
+    centers: &mut [Vec<f32>],
+    mass: &mut [f64],
+    rng: &mut StdRng,
+    mut split: impl FnMut(usize, usize),
+) {
     let threshold = 0.1 * mass.iter().sum::<f64>() / mass.len() as f64;
     let dead: Vec<_> = (0..mass.len()).filter(|&j| mass[j] < threshold).collect();
     if dead.is_empty() {
@@ -90,23 +96,28 @@ fn revive(centers: &mut [Vec<f32>], mass: &mut [f64], rng: &mut StdRng) {
         .collect();
     donors.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
     for (child, (_, donor)) in dead.into_iter().zip(donors) {
-        mass[donor] *= 0.5;
-        mass[child] = mass[donor];
-        for axis in 0..centers[donor].len() {
-            let value = f64::from(centers[donor][axis]);
-            let delta = if axis % 2 == 0 { 1e-4 } else { -1e-4 };
-            let finite = |x: f64| x.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
-            centers[donor][axis] = finite(value * (1.0 - delta));
-            centers[child][axis] = finite(value * (1.0 + delta));
-        }
-        if centers[child] == centers[donor] {
-            let x = centers[child][0];
-            centers[child][0] = if x == f32::MAX {
-                x.next_down()
-            } else {
-                x.next_up()
-            };
-        }
+        split_pair(centers, mass, child, donor);
+        split(child, donor);
+    }
+}
+
+fn split_pair(centers: &mut [Vec<f32>], mass: &mut [f64], child: usize, donor: usize) {
+    mass[donor] *= 0.5;
+    mass[child] = mass[donor];
+    for axis in 0..centers[donor].len() {
+        let value = f64::from(centers[donor][axis]);
+        let delta = if axis % 2 == 0 { 1e-4 } else { -1e-4 };
+        let finite = |x: f64| x.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
+        centers[donor][axis] = finite(value * (1.0 - delta));
+        centers[child][axis] = finite(value * (1.0 + delta));
+    }
+    if centers[child] == centers[donor] {
+        let x = centers[child][0];
+        centers[child][0] = if x == f32::MAX {
+            x.next_down()
+        } else {
+            x.next_up()
+        };
     }
 }
 
@@ -195,7 +206,12 @@ impl Totals {
         }
     }
 
-    fn update(&mut self, centers: &mut [Vec<f32>], mass: &mut [f64], alpha: f64) {
+    fn update<const CLEAR: bool>(
+        &mut self,
+        centers: &mut [Vec<f32>],
+        mass: &mut [f64],
+        alpha: f64,
+    ) {
         for (j, center) in centers.iter_mut().enumerate() {
             let count = self.counts[j] as f64;
             // At a unit step Faiss retains an empty cluster's prior mass.
@@ -209,9 +225,13 @@ impl Totals {
                 for (x, sum) in center.iter_mut().zip(&mut self.sums[j]) {
                     let old = f64::from(*x);
                     *x = (old + weight * (*sum / count - old)) as f32;
-                    *sum = 0.0;
+                    if CLEAR {
+                        *sum = 0.0;
+                    }
                 }
-                self.counts[j] = 0;
+                if CLEAR {
+                    self.counts[j] = 0;
+                }
             }
         }
     }
@@ -224,7 +244,15 @@ impl Emeans {
             k,
             epochs: 5.0,
             seed: None,
+            speed: None,
         }
+    }
+
+    /// Use an independent constant-step EMA for the final readout. The
+    /// multiplier is relative to the training schedule’s floor.
+    pub fn with_shadow_speed(mut self, speed: f64) -> Self {
+        self.speed = Some(speed);
+        self
     }
 
     /// Set a positive training budget in passes. A fractional pass precedes
@@ -281,6 +309,18 @@ impl Emeans {
             .map(|&i| data.row(i).to_vec())
             .collect();
         let mut mass = vec![1.0 / 65536.0; self.k];
+        let mut shadow = if let Some(speed) = self.speed {
+            let rate = speed * 0.1 * alpha;
+            if !rate.is_finite() || rate <= 0.0 || rate > 1.0 {
+                return Err(Error::InvalidParameter {
+                    name: "speed",
+                    message: "must give a constant step in (0, 1]",
+                });
+            }
+            Some((centers.clone(), mass.clone(), rate))
+        } else {
+            None
+        };
         let mut batch = Totals::new(self.k, d);
         let mut closing = Totals::new(self.k, d);
         let mut closing_rows = 0;
@@ -307,10 +347,17 @@ impl Emeans {
                         largest[cluster] = largest[cluster].max(max_bits);
                     }
                 }
-                batch.update(&mut centers, &mut mass, step_size(alpha, step, total_steps));
+                if let Some((centers, mass, rate)) = &mut shadow {
+                    batch.update::<false>(centers, mass, *rate);
+                }
+                batch.update::<true>(&mut centers, &mut mass, step_size(alpha, step, total_steps));
                 step += 1;
                 if d > 2 && step % 5 == 0 {
-                    revive(&mut centers, &mut mass, &mut rng);
+                    revive(&mut centers, &mut mass, &mut rng, |child, donor| {
+                        if let Some((centers, mass, _)) = &mut shadow {
+                            split_pair(centers, mass, child, donor);
+                        }
+                    });
                 }
             }
         }
@@ -346,6 +393,9 @@ impl Emeans {
                     centers[j][axis] = acc.mean(closing.counts[j]);
                 }
             }
+        }
+        if let Some((shadow_centers, _, _)) = shadow {
+            centers = shadow_centers;
         }
         util::assign_all(data, &centers, &mut labels, &SquaredEuclidean);
         Ok(EmeansFit {
@@ -400,7 +450,12 @@ mod tests {
     fn revival_uses_distinct_donors_and_halves_their_mass() {
         let mut centers = vec![vec![1., 2., 3.], vec![3., 4., 5.], vec![0.; 3], vec![0.; 3]];
         let mut mass = [4., 8., 0., 0.];
-        revive(&mut centers, &mut mass, &mut StdRng::seed_from_u64(42));
+        revive(
+            &mut centers,
+            &mut mass,
+            &mut StdRng::seed_from_u64(42),
+            |_, _| {},
+        );
         assert_eq!(mass[..2], [2., 4.]);
         mass[2..].sort_by(f64::total_cmp);
         assert_eq!(mass[2..], [2., 4.]);

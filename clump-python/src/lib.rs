@@ -210,16 +210,18 @@ fn kmeans<'py>(
 
 /// Fit squared-Euclidean e-means and return (nearest labels, finalized centroids).
 #[pyfunction]
-#[pyo3(signature = (data, k, epochs = 5.0, seed = None))]
+#[pyo3(signature = (data, k, epochs = 5.0, seed = None, speed = None))]
 fn emeans<'py>(
     py: Python<'py>,
     data: &Bound<'py, PyAny>,
     k: usize,
     epochs: f64,
     seed: Option<u64>,
+    speed: Option<f64>,
 ) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
     let rows = extract_data(data)?;
     let mut model = Emeans::new(k).with_epochs(epochs);
+    if let Some(speed) = speed { model = model.with_shadow_speed(speed); }
     if let Some(seed) = seed {
         model = model.with_seed(seed);
     }
