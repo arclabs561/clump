@@ -156,8 +156,8 @@ No optional features are enabled by default.
 
 ## Examples
 
-See [`examples/README.md`](examples/README.md) for run commands and sample
-output.
+To cluster your own points, pass a JSON array to [`dbscan_json`](examples/README.md#cluster-your-own-points).
+The other [examples](examples/README.md) include run commands and sample output.
 
 ```sh
 cargo run --example quickstart
