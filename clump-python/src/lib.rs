@@ -272,9 +272,9 @@ fn dbscan<'py>(
 ///     data: Points as (n, d) numpy array or list of lists.
 ///     min_cluster_size: Minimum points for a cluster to persist.
 ///     min_points: k for core distance computation (default: min_cluster_size).
-///     allow_single_cluster: Allow all points to form one cluster (default:
-///         False, as in the hdbscan library and scikit-learn). With False,
-///         data that never splits into two clusters is all noise.
+///     allow_single_cluster: Allow the root to form one cluster (default: False).
+///         It keeps the points present at its last split or fallout. Sparser
+///         points are noise. With False, an unsplit hierarchy is all noise.
 ///
 /// Returns:
 ///     numpy.ndarray of cluster labels (int64). Noise points are labeled -1.

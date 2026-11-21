@@ -31,7 +31,9 @@ Outlier label: NOISE
 ### `clustering`
 
 Prints the per-point cluster assignment for k-means, DBSCAN, and HDBSCAN on a
-small three-blob dataset, so you can compare their assignments.
+small three-blob dataset. It then runs HDBSCAN on `[0, 1, 2, 10, 20]` with
+`min_cluster_size=3`. No two groups meet that size. Allowing the root selects
+the first three points, which are already connected at distance 1.
 
 ```bash
 cargo run --release --example clustering
@@ -47,6 +49,11 @@ cargo run --release --example clustering
   point  0 (  0.0,   0.0) => cluster 0
   point  4 (  5.0,   5.0) => cluster 1
   ...
+```
+
+```text
+HDBSCAN allow_single_cluster=false: members []
+HDBSCAN allow_single_cluster=true: members [0.0, 1.0, 2.0]
 ```
 
 ### `flat_input`

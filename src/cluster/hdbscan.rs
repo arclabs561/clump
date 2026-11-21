@@ -119,7 +119,7 @@ impl<D: DistanceMetric> Hdbscan<D> {
         self
     }
 
-    /// Allow the root of the hierarchy (all points as one cluster) to be
+    /// Allow the root of the hierarchy to be
     /// selected. Default `false`, as in the McInnes `hdbscan` library and
     /// scikit-learn.
     ///
@@ -131,9 +131,8 @@ impl<D: DistanceMetric> Hdbscan<D> {
     /// points is labeled entirely as noise. Set `true` when a single cluster
     /// is a valid answer.
     ///
-    /// When the root is selected, every point is assigned to it. The
-    /// reference implementations additionally relabel its low-density points
-    /// as noise; clump does not.
+    /// When the root is selected, only points that survive to its densest
+    /// outgoing edge belong to it. Earlier fallouts remain noise.
     pub fn with_allow_single_cluster(mut self, allow: bool) -> Self {
         self.allow_single_cluster = allow;
         self
@@ -435,17 +434,8 @@ fn extract_clusters(
             let new_cluster = next_cluster_id;
             next_cluster_id += 1;
 
-            // Left child: if it has a cluster, use it; otherwise create one.
-            let left_child = comp_cluster[ru].unwrap_or_else(|| {
-                let id = next_cluster_id;
-                next_cluster_id += 1;
-                id
-            });
-            let right_child = comp_cluster[rv].unwrap_or_else(|| {
-                let id = next_cluster_id;
-                next_cluster_id += 1;
-                id
-            });
+            let left_child = comp_cluster[ru].expect("a large component has a cluster");
+            let right_child = comp_cluster[rv].expect("a large component has a cluster");
 
             condensed.push(CondensedEdge {
                 parent: new_cluster,
@@ -460,49 +450,12 @@ fn extract_clusters(
                 child_size: rv_size,
             });
 
-            // Also record individual point fallouts for the children if they
-            // had no prior cluster (all their points are "born" into the child).
-            if comp_cluster[ru].is_none() {
-                for &p in &comp_members[ru] {
-                    condensed.push(CondensedEdge {
-                        parent: left_child,
-                        child: p,
-                        lambda,
-                        child_size: 1,
-                    });
-                }
-            }
-            if comp_cluster[rv].is_none() {
-                for &p in &comp_members[rv] {
-                    condensed.push(CondensedEdge {
-                        parent: right_child,
-                        child: p,
-                        lambda,
-                        child_size: 1,
-                    });
-                }
-            }
-
             let new_root = union_with_members(&mut uf, &mut comp_members, ru, rv);
             comp_cluster[new_root] = Some(new_cluster);
         } else if left_big || right_big {
             let (big, small) = if left_big { (ru, rv) } else { (rv, ru) };
 
-            // Ensure big side has a cluster.
-            let cluster = comp_cluster[big].unwrap_or_else(|| {
-                let id = next_cluster_id;
-                next_cluster_id += 1;
-                // Record all existing big-component points as born into this cluster.
-                for &p in &comp_members[big] {
-                    condensed.push(CondensedEdge {
-                        parent: id,
-                        child: p,
-                        lambda,
-                        child_size: 1,
-                    });
-                }
-                id
-            });
+            let cluster = comp_cluster[big].expect("a large component has a cluster");
 
             // Small side's points fall out.
             for &p in &comp_members[small] {
@@ -517,10 +470,22 @@ fn extract_clusters(
             let new_root = union_with_members(&mut uf, &mut comp_members, big, small);
             comp_cluster[new_root] = Some(cluster);
         } else {
-            // Neither is large. Just merge; no cluster event.
-            let existing = comp_cluster[ru].or(comp_cluster[rv]);
             let new_root = union_with_members(&mut uf, &mut comp_members, ru, rv);
-            comp_cluster[new_root] = existing;
+            // At this edge the component first reaches the minimum size. In
+            // the top-down hierarchy both children fall out at this density.
+            if ru_size + rv_size >= min_cluster_size {
+                let cluster = next_cluster_id;
+                next_cluster_id += 1;
+                comp_cluster[new_root] = Some(cluster);
+                for &point in &comp_members[new_root] {
+                    condensed.push(CondensedEdge {
+                        parent: cluster,
+                        child: point,
+                        lambda,
+                        child_size: 1,
+                    });
+                }
+            }
         }
     }
 
@@ -657,7 +622,18 @@ fn extract_clusters(
             continue;
         }
         let label = label_map[i];
-        label_all_points(&condensed, &selected, n, i, label, &mut labels);
+        let min_lambda = if is_child[i] {
+            0.0
+        } else {
+            // For an EOM-selected root, keep the points present at its last
+            // split (or final fallout). Child cluster edges count too.
+            condensed
+                .iter()
+                .filter(|edge| edge.parent == n + i)
+                .map(|edge| edge.lambda)
+                .fold(0.0, f64::max)
+        };
+        label_all_points(&condensed, &selected, n, i, label, min_lambda, &mut labels);
     }
 
     // Enforce min_cluster_size: relabel undersized clusters as NOISE.
@@ -768,7 +744,7 @@ fn extract_clusters(
             continue;
         }
         let lmax = cluster_lambda_max[sel_idx];
-        if lmax > 0.0 {
+        if point_lambda[p] < lmax {
             outlier_scores[p] = ((1.0 - point_lambda[p] / lmax) as f32).clamp(0.0, 1.0);
         } else {
             outlier_scores[p] = 0.0;
@@ -826,6 +802,7 @@ fn label_all_points(
     n: usize,
     cluster_idx: usize,
     label: usize,
+    min_lambda: f64,
     labels: &mut [usize],
 ) {
     let cluster_id = cluster_idx + n;
@@ -835,13 +812,15 @@ fn label_all_points(
             continue;
         }
         if edge.child_size == 1 && edge.child < n {
-            labels[edge.child] = label;
+            if edge.lambda >= min_lambda {
+                labels[edge.child] = label;
+            }
         } else if edge.child_size > 1 && edge.child >= n {
             let child_idx = edge.child - n;
             if selected[child_idx] {
                 continue;
             }
-            label_all_points(condensed, selected, n, child_idx, label, labels);
+            label_all_points(condensed, selected, n, child_idx, label, min_lambda, labels);
         }
     }
 }
@@ -954,6 +933,29 @@ mod tests {
         let first = non_noise[0];
         for &l in &non_noise[1..] {
             assert_eq!(l, first);
+        }
+    }
+
+    #[test]
+    fn selected_root_matches_reference_fallout_and_ties() {
+        // Python hdbscan 0.8.44, exact MST, EOM, min_samples=1.
+        let cases: &[(&[f32], &[usize])] = &[
+            (&[0., 1., 2., 10., 20.], &[0, 0, 0, NOISE, NOISE]),
+            (&[0., 1., 2.], &[0, 0, 0]),
+            // The root splits into two valid children after the halo leaves.
+            (&[0., 1., 2., 4., 5., 6., 30.], &[0, 0, 0, 0, 0, 0, NOISE]),
+            (&[0., 1., 2., 3., 9.], &[0, 0, 0, 0, NOISE]),
+            (&[20., 0., 10., 0., 0.], &[NOISE, 0, NOISE, 0, 0]),
+        ];
+        let model = Hdbscan::new()
+            .with_min_samples(1)
+            .with_min_cluster_size(3)
+            .with_allow_single_cluster(true);
+        for &(coords, expected) in cases {
+            let points: Vec<Vec<f32>> = coords.iter().map(|&x| vec![x]).collect();
+            let result = model.fit(&points).unwrap();
+            assert_eq!(result.labels, expected, "{coords:?}");
+            assert!(result.outlier_scores.iter().all(|x| x.is_finite()));
         }
     }
 

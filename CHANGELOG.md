@@ -19,6 +19,8 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- When HDBSCAN selects a single root cluster, it now keeps points at the
+  root’s final density, including ties, and labels sparser points as noise.
 - `Hdbscan` panicked on a single point; it now returns one noise label.
 
 ## [0.7.3] - 2026-11-18
