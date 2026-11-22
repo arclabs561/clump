@@ -235,11 +235,14 @@ impl<D: DistanceMetric> Dbscan<D> {
         cell_buf[..d].copy_from_slice(&center_cell);
 
         let n_adjacent = 3i64.pow(d as u32);
-        for offset_idx in 0..n_adjacent {
+        'adjacent: for offset_idx in 0..n_adjacent {
             let mut cell = cell_buf;
             let mut idx = offset_idx;
             for c in cell[..d].iter_mut() {
-                *c += (idx % 3) - 1;
+                let Some(adjacent) = c.checked_add((idx % 3) - 1) else {
+                    continue 'adjacent;
+                };
+                *c = adjacent;
                 idx /= 3;
             }
             if let Some(points) = grid.get(&cell[..d]) {
@@ -530,6 +533,19 @@ impl<D: DistanceMetric> Dbscan<D> {
 #[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_neighbors_at_saturated_coordinates() {
+        let data = vec![vec![1e20], vec![1e20], vec![-1e20], vec![-1e20]];
+        let model = Dbscan::new(1.0, 2);
+        let grid = Dbscan::<Euclidean>::build_grid(&data, 1.0);
+        for (point, neighbor) in [(0, 1), (2, 3)] {
+            assert_eq!(
+                model.region_query_grid(&data, point, &grid, 1.0),
+                vec![neighbor]
+            );
+        }
+    }
 
     /// Noise set by definition: a point is noise iff it is not a core point
     /// and no core point lies within epsilon of it.
